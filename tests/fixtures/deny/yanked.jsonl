@@ -1,0 +1,2 @@
+{"fields":{"code":"yanked","graphs":[{"Krate":{"name":"smallvec","version":"1.4.0"},"parents":[{"Krate":{"name":"fx","version":"0.1.0"}}]}],"labels":[{"column":1,"line":2,"message":"yanked version","span":"smallvec 1.4.0 registry+https://github.com/rust-lang/crates.io-index"}],"message":"detected yanked crate (try `cargo update -p smallvec`)","severity":"error"},"type":"diagnostic"}
+{"fields":{"advisories":{"errors":1,"helps":0,"notes":2,"warnings":0}},"type":"summary"}

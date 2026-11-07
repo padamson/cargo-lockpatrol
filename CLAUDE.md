@@ -15,7 +15,7 @@ One tag releases three things that share one checker:
   for the runner, verifies it, and drives the issue with `gh`;
 - `.pre-commit-hooks.yaml`, for prek and pre-commit.
 
-None of the three exists yet. Until the first release, this repo's own
+None of the three has a release yet. Until the first release, this repo's own
 advisory gate is the copy it got from the template: `scripts/check-advisories.sh`,
 `scripts/advisory-issue-body.py`, `scripts/test-check-advisories.sh`,
 `advisory-monitor.yml` and the two advisory hooks. Port every case in
@@ -157,12 +157,13 @@ narrows from there.
 
 A test is a claim about behavior, named as the claim, one claim per
 test, asserting the value (`assert_eq!` on an enum, `matches!` on the
-error variant and what it names) rather than prose. The seed crate shows
-the shapes: a decision returned as a value, an error that carries the
-offending input, an environment read through an injected lookup, a
-`TempDir`-owning fixture and a bounded poll in `tests/common/mod.rs`,
-and one `#[ignore = "reason; run with ..."]` test as the gate for
-anything a fresh clone may lack. Never `return` from a test because a
+error variant and what it names) rather than prose. The crate shows
+the shapes: a decision returned as a value (`deny::classify`), an error
+that carries the offending input (`check::UnknownLocked`), an
+environment read through an injected lookup (`check::cargo_program`), a
+`TempDir`-owning fixture in `tests/common/mod.rs`, a stub process
+injected through `$CARGO` (`tests/check.rs`), and one `#[ignore = "reason; run with ..."]` test (the `live_` test in
+`tests/check.rs`) as the gate for anything a fresh clone may lack. Never `return` from a test because a
 precondition is missing.
 
 `.config/nextest.toml` bounds every test with a slow-timeout; the hook

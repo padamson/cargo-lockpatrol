@@ -22,6 +22,7 @@ unsafe_code = "deny"
 [lints.clippy]
 
 [dependencies]
+serde_json = "1.0.154"
 
 [dev-dependencies]
 # Scratch directories for the integration-test fixture in tests/common.

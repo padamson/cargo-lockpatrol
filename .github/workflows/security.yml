@@ -36,16 +36,28 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Install cargo-deny
+      - name: Install cargo-deny and cargo-nextest
         uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
-          tool: cargo-deny
+          tool: cargo-deny,cargo-nextest
 
       - name: Run cargo deny
         run: cargo deny --workspace check bans licenses sources
 
       - name: Check advisories in every lockfile
         run: scripts/check-advisories.sh
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: live
+
+      # The unit and stub tests read cargo-deny JSON captured from one
+      # version (tests/fixtures/deny). This job has the real cargo-deny
+      # and the advisory database, so the `live_` tests run here and fail
+      # when a new cargo-deny writes something the checker cannot read.
+      - name: Check the checker against the real cargo-deny
+        run: cargo nextest run --profile ci --test check --run-ignored only -E 'test(/^live_/)'
 
   supply-chain:
     name: Supply Chain Review
