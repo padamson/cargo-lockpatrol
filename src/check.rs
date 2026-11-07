@@ -627,8 +627,8 @@ mod tests {
             false,
         );
         assert_eq!(
-            value_after(&args, "--manifest-path"),
-            Some(OsStr::new("fuzz/Cargo.toml"))
+            value_after(&args, "--manifest-path").map(Path::new),
+            Some(Path::new("fuzz/Cargo.toml"))
         );
     }
 
