@@ -29,30 +29,10 @@ url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/
 version = "2.13.2"
 criteria = "safe-to-run"
 
-[[exemptions.cfg-if]]
-version = "1.0.5"
-criteria = "safe-to-run"
-
 [[exemptions.fastrand]]
 version = "2.5.0"
 criteria = "safe-to-run"
 
-[[exemptions.libc]]
-version = "0.2.189"
-criteria = "safe-to-run"
-
-[[exemptions.linux-raw-sys]]
-version = "0.12.1"
-criteria = "safe-to-run"
-
 [[exemptions.r-efi]]
 version = "6.0.0"
-criteria = "safe-to-run"
-
-[[exemptions.rustix]]
-version = "1.1.5"
-criteria = "safe-to-run"
-
-[[exemptions.windows-sys]]
-version = "0.61.2"
 criteria = "safe-to-run"
