@@ -1,24 +1,35 @@
 use std::ffi::OsString;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use cargo_lockpatrol::check::{self, EXIT_BROKEN, EXIT_CLEAN, Locked, Options, UnknownLocked};
+use cargo_lockpatrol::render;
 
 const USAGE: &str = "\
-Check every tracked Cargo.lock for RustSec advisories with cargo-deny.
+Check every tracked Cargo.lock for RustSec advisories with cargo-deny, and
+keep a tracking issue's body current with the findings.
 
 Usage: cargo lockpatrol check [--config <PATH>] [--locked <root|none|all>]
+       cargo lockpatrol render <OLD> <REPORT> <OUT> <COMMENT> [--run-url <URL>]
 
-Options:
+check writes a report to stdout. Exit status: 0 clean, 1 an advisory found,
+2 a check broke, 3 both.
+
   --config <PATH>   the deny.toml every tree is checked against
                     [default: deny.toml at the repository root]
   --locked <WHICH>  which trees must match their Cargo.lock: root, none or all
                     [default: root]
-  -h, --help        print this help
-  -V, --version     print the version
 
-Exit status: 0 clean, 1 an advisory found, 2 a check broke, 3 both.";
+render reads the issue's old body from OLD (an empty file when there is no
+issue) and a check report from REPORT, writes the new body to OUT and a
+comment to COMMENT, and prints what an open issue needs: changed (edit the
+body and post the comment), refreshed (edit the body) or unchanged.
+
+  --run-url <URL>   the run log the comment links to
+
+  -h, --help        print this help
+  -V, --version     print the version";
 
 /// What the command line asked for.
 #[derive(Debug, PartialEq, Eq)]
@@ -28,6 +39,13 @@ enum Request {
     Check {
         config: Option<PathBuf>,
         locked: Locked,
+    },
+    Render {
+        old: PathBuf,
+        report: PathBuf,
+        out: PathBuf,
+        comment: PathBuf,
+        run_url: Option<String>,
     },
 }
 
@@ -39,6 +57,7 @@ enum UsageError {
     UnknownCommand(String),
     UnexpectedArgument(String),
     MissingValue(&'static str),
+    MissingArgument(&'static str),
     Locked(UnknownLocked),
 }
 
@@ -49,9 +68,14 @@ impl fmt::Display for UsageError {
             UsageError::UnknownCommand(c) => write!(f, "unknown command {c:?}"),
             UsageError::UnexpectedArgument(a) => write!(f, "unexpected argument {a:?}"),
             UsageError::MissingValue(flag) => write!(f, "{flag} needs a value"),
+            UsageError::MissingArgument(name) => write!(f, "missing {name}"),
             UsageError::Locked(e) => write!(f, "{e}"),
         }
     }
+}
+
+fn unexpected(arg: &std::ffi::OsStr) -> UsageError {
+    UsageError::UnexpectedArgument(arg.to_string_lossy().into_owned())
 }
 
 /// Parse the arguments after the program name. Cargo runs a subcommand
@@ -64,15 +88,17 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Request, UsageError
     }
     let command = args.next().ok_or(UsageError::NoCommand)?;
     match command.to_str() {
-        Some("-h" | "--help" | "help") => return Ok(Request::Help),
-        Some("-V" | "--version") => return Ok(Request::Version),
-        Some("check") => {}
-        _ => {
-            return Err(UsageError::UnknownCommand(
-                command.to_string_lossy().into_owned(),
-            ));
-        }
+        Some("-h" | "--help" | "help") => Ok(Request::Help),
+        Some("-V" | "--version") => Ok(Request::Version),
+        Some("check") => parse_check(args),
+        Some("render") => parse_render(args),
+        _ => Err(UsageError::UnknownCommand(
+            command.to_string_lossy().into_owned(),
+        )),
     }
+}
+
+fn parse_check(mut args: impl Iterator<Item = OsString>) -> Result<Request, UsageError> {
     let (mut config, mut locked) = (None, Locked::default());
     while let Some(arg) = args.next() {
         let mut value = |flag| args.next().ok_or(UsageError::MissingValue(flag));
@@ -83,14 +109,41 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Request, UsageError
                 let v = value("--locked")?;
                 locked = v.to_string_lossy().parse().map_err(UsageError::Locked)?;
             }
-            _ => {
-                return Err(UsageError::UnexpectedArgument(
-                    arg.to_string_lossy().into_owned(),
-                ));
-            }
+            _ => return Err(unexpected(&arg)),
         }
     }
     Ok(Request::Check { config, locked })
+}
+
+fn parse_render(mut args: impl Iterator<Item = OsString>) -> Result<Request, UsageError> {
+    const NAMES: [&str; 4] = ["OLD", "REPORT", "OUT", "COMMENT"];
+    let (mut paths, mut run_url) = (Vec::new(), None);
+    while let Some(arg) = args.next() {
+        match arg.to_str() {
+            Some("-h" | "--help") => return Ok(Request::Help),
+            Some("--run-url") => {
+                // An empty value, as from an unset variable, is no link
+                // rather than a link to nowhere.
+                let v = args.next().ok_or(UsageError::MissingValue("--run-url"))?;
+                run_url = Some(v.to_string_lossy().into_owned()).filter(|u| !u.is_empty());
+            }
+            Some(flag) if flag.starts_with('-') => return Err(unexpected(&arg)),
+            _ => paths.push(PathBuf::from(arg)),
+        }
+    }
+    match <[PathBuf; 4]>::try_from(paths) {
+        Ok([old, report, out, comment]) => Ok(Request::Render {
+            old,
+            report,
+            out,
+            comment,
+            run_url,
+        }),
+        Err(paths) => Err(match NAMES.get(paths.len()) {
+            Some(name) => UsageError::MissingArgument(name),
+            None => unexpected(paths[NAMES.len()].as_os_str()),
+        }),
+    }
 }
 
 fn main() -> ExitCode {
@@ -104,6 +157,13 @@ fn main() -> ExitCode {
             EXIT_CLEAN
         }
         Ok(Request::Check { config, locked }) => run_check(config, locked),
+        Ok(Request::Render {
+            old,
+            report,
+            out,
+            comment,
+            run_url,
+        }) => run_render(&old, &report, &out, &comment, run_url.as_deref()),
         Err(e) => {
             eprintln!("error: {e}\n\n{USAGE}");
             EXIT_BROKEN
@@ -143,6 +203,43 @@ fn run_check(config: Option<PathBuf>, locked: Locked) -> u8 {
         eprintln!("error: could not write the report: {e}");
         EXIT_BROKEN
     })
+}
+
+fn run_render(old: &Path, report: &Path, out: &Path, comment: &Path, run_url: Option<&str>) -> u8 {
+    match render_files(old, report, out, comment, run_url) {
+        Ok(status) => {
+            println!("{status}");
+            EXIT_CLEAN
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            EXIT_BROKEN
+        }
+    }
+}
+
+/// Read the old body and the report, write the new body and the comment,
+/// and return what the issue needs. Each error names the file at fault.
+fn render_files(
+    old: &Path,
+    report: &Path,
+    out: &Path,
+    comment: &Path,
+    run_url: Option<&str>,
+) -> Result<render::Status, String> {
+    let read = |p: &Path| {
+        std::fs::read_to_string(p).map_err(|e| format!("could not read {}: {e}", p.display()))
+    };
+    let write = |p: &Path, text: &str| {
+        std::fs::write(p, text).map_err(|e| format!("could not write {}: {e}", p.display()))
+    };
+    let rendered = render::render(&read(old)?, &read(report)?);
+    write(out, &rendered.body)?;
+    write(
+        comment,
+        &render::comment(&rendered.resolved, &rendered.new, run_url),
+    )?;
+    Ok(rendered.status)
 }
 
 #[cfg(test)]
@@ -243,6 +340,110 @@ mod tests {
         assert_eq!(parse(args(&["-V"])), Ok(Request::Version));
     }
 
+    fn render_request(run_url: Option<&str>) -> Request {
+        Request::Render {
+            old: "old.md".into(),
+            report: "report.txt".into(),
+            out: "body.md".into(),
+            comment: "comment.md".into(),
+            run_url: run_url.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn render_takes_its_four_paths_in_order() {
+        assert_eq!(
+            parse(args(&[
+                "render",
+                "old.md",
+                "report.txt",
+                "body.md",
+                "comment.md"
+            ])),
+            Ok(render_request(None))
+        );
+    }
+
+    #[test]
+    fn the_run_url_may_come_anywhere_among_the_paths() {
+        assert_eq!(
+            parse(args(&[
+                "render",
+                "old.md",
+                "--run-url",
+                "https://example.invalid/run",
+                "report.txt",
+                "body.md",
+                "comment.md"
+            ])),
+            Ok(render_request(Some("https://example.invalid/run")))
+        );
+    }
+
+    #[test]
+    fn render_without_all_four_paths_names_the_first_one_missing() {
+        assert_eq!(
+            parse(args(&["render", "old.md", "report.txt"])),
+            Err(UsageError::MissingArgument("OUT"))
+        );
+    }
+
+    #[test]
+    fn a_fifth_path_is_unexpected() {
+        assert_eq!(
+            parse(args(&["render", "a", "b", "c", "d", "e"])),
+            Err(UsageError::UnexpectedArgument("e".into()))
+        );
+    }
+
+    #[test]
+    fn a_check_flag_is_unexpected_under_render() {
+        assert_eq!(
+            parse(args(&["render", "a", "--locked", "all"])),
+            Err(UsageError::UnexpectedArgument("--locked".into()))
+        );
+    }
+
+    #[test]
+    fn an_empty_run_url_is_no_link() {
+        assert_eq!(
+            parse(args(&[
+                "render",
+                "old.md",
+                "report.txt",
+                "body.md",
+                "comment.md",
+                "--run-url",
+                ""
+            ])),
+            Ok(render_request(None))
+        );
+    }
+
+    #[test]
+    fn a_run_url_flag_without_its_value_is_an_error_naming_it() {
+        assert_eq!(
+            parse(args(&["render", "a", "b", "c", "d", "--run-url"])),
+            Err(UsageError::MissingValue("--run-url"))
+        );
+    }
+
+    #[test]
+    fn help_as_a_flags_value_is_the_value() {
+        assert_eq!(
+            parse(args(&["check", "--config", "--help"])),
+            Ok(Request::Check {
+                config: Some(PathBuf::from("--help")),
+                locked: Locked::Root
+            })
+        );
+    }
+
+    #[test]
+    fn help_after_render_is_still_help() {
+        assert_eq!(parse(args(&["render", "a", "--help"])), Ok(Request::Help));
+    }
+
     #[test]
     fn a_usage_error_message_names_the_argument_at_fault() {
         for (err, token) in [
@@ -252,6 +453,7 @@ mod tests {
                 "--frozen",
             ),
             (UsageError::MissingValue("--config"), "--config"),
+            (UsageError::MissingArgument("COMMENT"), "COMMENT"),
             (UsageError::Locked(UnknownLocked("x".into())), "\"x\""),
         ] {
             let msg = err.to_string();

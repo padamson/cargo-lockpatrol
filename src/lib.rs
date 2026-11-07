@@ -13,10 +13,12 @@
 //! | 3 | both: one tree found an advisory and another broke |
 //!
 //! [`deny`] reads one cargo-deny run; [`check`] finds the trees and runs
-//! cargo-deny on each.
+//! cargo-deny on each; [`render`] turns a report and a tracking issue's
+//! old body into its new body and a comment.
 
 pub mod check;
 pub mod deny;
+pub mod render;
 
 /// The cargo-deny JSON captured in tests/fixtures/deny, shared by the unit
 /// tests of both modules.

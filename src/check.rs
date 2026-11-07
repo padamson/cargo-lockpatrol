@@ -275,7 +275,7 @@ fn check_trees(
 
 /// Write each tree's section of the report to `out`, and to `err` why a
 /// tree broke and any other error a tree with findings reported.
-fn write_report(
+pub(crate) fn write_report(
     results: &[(PathBuf, TreeResult)],
     out: &mut impl Write,
     err: &mut impl Write,

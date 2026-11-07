@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 
-use common::Workspace;
+use common::{Workspace, shown};
 
 const STUB: &str = r#"#!/usr/bin/env bash
 printf '%s\n' "$*" >> "$STUB_LOG"
@@ -417,15 +417,6 @@ fn live_check(dependencies: &str) -> Output {
         .env("CARGO", env!("CARGO"))
         .output()
         .expect("run cargo-lockpatrol")
-}
-
-fn shown(out: &Output) -> String {
-    format!(
-        "exit {:?}\n--- stdout\n{}--- stderr\n{}",
-        out.status.code(),
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    )
 }
 
 #[test]

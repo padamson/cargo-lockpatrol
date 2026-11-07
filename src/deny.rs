@@ -101,11 +101,7 @@ pub fn classify(exit: Option<i32>, output: &str) -> TreeResult {
             Some("summary") => summary = true,
             Some("diagnostic") if fields["severity"] == "error" => match finding(fields) {
                 Some(f) => findings.push(f),
-                None => messages.push(format!(
-                    "error[{}]: {}",
-                    text(&fields["code"]),
-                    text(&fields["message"])
-                )),
+                None => messages.push(headline(text(&fields["code"]), text(&fields["message"]))),
             },
             Some("log") if fields["level"] == "ERROR" => {
                 messages.push(format!("[ERROR] {}", text(&fields["message"])))
@@ -205,11 +201,31 @@ fn graph_lines(node: &Value, levels: &mut Vec<bool>, out: &mut Vec<String>) {
     }
 }
 
+const HEADING: &str = "## cargo deny check advisories (";
+
 /// The heading of a tree's section in the report. The renderer keys each
-/// finding on the lockfile named here, so the wording is part of the
-/// format, not prose.
+/// finding on the lockfile named here (read back by [`lockfile_of`]), so
+/// the wording is part of the format, not prose.
 pub fn heading(lockfile: &str) -> String {
-    format!("## cargo deny check advisories ({lockfile})")
+    format!("{HEADING}{lockfile})")
+}
+
+/// The lockfile a [`heading`] names, or `None` for any other line.
+pub fn lockfile_of(line: &str) -> Option<&str> {
+    line.strip_prefix(HEADING)?.strip_suffix(')')
+}
+
+/// A diagnostic's first line, as cargo-deny's human output starts it. The
+/// renderer reads a finding from it, so it is part of the format too.
+pub fn headline(code: &str, message: &str) -> String {
+    format!("error[{code}]: {message}")
+}
+
+impl Finding {
+    /// This finding's [`headline`].
+    pub fn headline(&self) -> String {
+        headline(&self.code, &self.message)
+    }
 }
 
 /// A tree's section of the report: its heading, then each finding as
@@ -231,7 +247,7 @@ pub fn section(lockfile: &str, findings: &[Finding]) -> String {
     let mut out = heading(lockfile);
     out.push('\n');
     for f in findings {
-        let _ = writeln!(out, "\nerror[{}]: {}", f.code, f.message);
+        let _ = writeln!(out, "\n{}", f.headline());
         for note in &f.notes {
             let mut lines = note.lines();
             let _ = writeln!(out, "   ├ {}", lines.next().unwrap_or(""));
@@ -514,6 +530,18 @@ mod tests {
         assert_eq!(
             text.lines().next(),
             Some("## cargo deny check advisories (fuzz/Cargo.lock)")
+        );
+    }
+
+    #[test]
+    fn a_heading_reads_back_to_its_lockfile_and_no_other_line_does() {
+        assert_eq!(
+            [
+                lockfile_of(&heading("naïve (old)/Cargo.lock")),
+                lockfile_of("## Alternatives to consider"),
+                lockfile_of("## cargo deny check advisories (Cargo.lock"),
+            ],
+            [Some("naïve (old)/Cargo.lock"), None, None]
         );
     }
 

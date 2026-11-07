@@ -7,6 +7,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Output;
 
 use tempfile::TempDir;
 
@@ -50,4 +51,15 @@ impl Workspace {
         fs::write(&path, contents).expect("write fixture file");
         path
     }
+}
+
+/// A finished process as a failed assertion should show it: the exit code,
+/// then stdout and stderr.
+pub fn shown(out: &Output) -> String {
+    format!(
+        "exit {:?}\n--- stdout\n{}--- stderr\n{}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
 }
