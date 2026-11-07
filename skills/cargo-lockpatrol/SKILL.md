@@ -1,13 +1,13 @@
 ---
-name: my-project
-description: Use when working with my-project — replace this line with the one-sentence trigger that tells an agent when to load this skill, naming the files, commands, or tasks that identify the situation.
+name: cargo-lockpatrol
+description: Use when a repo checks RustSec advisories with cargo-deny through cargo-lockpatrol, or is replacing copied scripts/check-advisories.sh and advisory-monitor.yml with its GitHub Action and pre-commit hook; covers the check exit codes, pinning the action and hook by SHA, and the tracking issue.
 license: MIT OR Apache-2.0
 metadata:
-  version: "0.1.1"
+  version: "0.1.2"
   internal: true
 ---
 
-# my-project
+# cargo-lockpatrol
 
 <!--
 Template users: this directory is the shape of a skill that

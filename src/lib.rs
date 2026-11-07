@@ -41,7 +41,7 @@ pub const DEFAULT_LARGE_THRESHOLD: i64 = 10;
 /// Classify `count` with the default threshold.
 ///
 /// ```
-/// use my_project::{classify, Size, SizeError};
+/// use cargo_lockpatrol::{classify, Size, SizeError};
 ///
 /// assert_eq!(classify(0), Ok(Size::Empty));
 /// assert_eq!(classify(10), Ok(Size::Large));

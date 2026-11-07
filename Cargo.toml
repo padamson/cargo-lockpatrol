@@ -1,14 +1,14 @@
 [package]
-name = "my-project"
+name = "cargo-lockpatrol"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
-description = "A short description of your project"
-repository = "https://github.com/OWNER/REPO"
-authors = ["Your Name"]
-categories = []
-keywords = []
+description = "Check every tracked Cargo.lock for RustSec advisories with cargo-deny, and keep one GitHub issue current with what it finds"
+repository = "https://github.com/padamson/cargo-lockpatrol"
+authors = ["Paul Adamson"]
+categories = ["development-tools::cargo-plugins", "command-line-utilities"]
+keywords = ["cargo-deny", "rustsec", "advisory", "security", "lockfile"]
 
 [lints.rust]
 # Nothing here has a reason to reach for unsafe. `deny` (not `forbid`)

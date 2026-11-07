@@ -15,14 +15,14 @@ After creating a repo from this template, complete these steps.
 
 ## Search and replace
 
-- [ ] Replace `my-project` with your project name in `Cargo.toml`, `README.md`, and `CLAUDE.md`
-- [ ] Replace `OWNER/REPO` with your GitHub path in `Cargo.toml` and `CHANGELOG.md`
-- [ ] Replace `Your Name` with your name in `Cargo.toml`, and `Paul Adamson` in `LICENSE-MIT`
-- [ ] Decide about `skills/my-project`: ship it under your crate's name, or delete it (see "Agent skill" below)
-- [ ] Update `description`, `categories`, and `keywords` in `Cargo.toml`
-- [ ] Update `README.md` with your project description and usage
-- [ ] Update `CLAUDE.md` with project-specific context
-- [ ] Strip `<!-- Template users: ... -->` and similar meta-comments from `README.md` and `CLAUDE.md` after the placeholder substitutions
+- [x] Replace `my-project` with your project name in `Cargo.toml`, `README.md`, and `CLAUDE.md`
+- [x] Replace `OWNER/REPO` with your GitHub path in `Cargo.toml` and `CHANGELOG.md`
+- [x] Replace `Your Name` with your name in `Cargo.toml`, and `Paul Adamson` in `LICENSE-MIT`
+- [x] Decide about `skills/my-project`: ship it under your crate's name, or delete it (see "Agent skill" below)
+- [x] Update `description`, `categories`, and `keywords` in `Cargo.toml`
+- [x] Update `README.md` with your project description and usage
+- [x] Update `CLAUDE.md` with project-specific context
+- [x] Strip `<!-- Template users: ... -->` and similar meta-comments from `README.md` and `CLAUDE.md` after the placeholder substitutions
 
 ## GitHub Settings (manual)
 
@@ -30,8 +30,8 @@ These settings cannot be configured via code and must be set in the GitHub UI.
 
 ### Repository settings
 
-- [ ] **Settings > General > Features:** Enable "Issues" and "Projects" if not already
-- [ ] **Settings > Branches > Branch protection:** Add rule for `main`.
+- [x] **Settings > General > Features:** Enable "Issues" and "Projects" if not already
+- [x] **Settings > Branches > Branch protection:** Add rule for `main`.
 
   **Apply protection only after the first PR has merged** — otherwise the rules block the very PR that first makes the required checks real.
 
@@ -97,7 +97,7 @@ These settings cannot be configured via code and must be set in the GitHub UI.
   JSON
   ```
 
-- [ ] **Settings > Rules > Rulesets > New tag ruleset:** restrict
+- [x] **Settings > Rules > Rulesets > New tag ruleset:** restrict
   creation, update and deletion of release tags, with the Repository admin
   role as the only bypass. The merge App's token can push a tag, a tag
   pushed with it starts `release.yml` (one pushed with `GITHUB_TOKEN`
@@ -139,7 +139,7 @@ Read the bump and merge it by hand. `dependabot.yml` keeps that action out
 of the weekly actions group, so its bump arrives as a PR of its own and
 the rest of the week's action bumps still merge on their own.
 
-- [ ] **Settings > General > Pull Requests:** turn on "Allow auto-merge"
+- [x] **Settings > General > Pull Requests:** turn on "Allow auto-merge"
   and "Automatically delete head branches". With auto-merge off, the
   workflow's `gh pr merge --auto` fails and nothing merges.
 
@@ -148,16 +148,16 @@ the rest of the week's action bumps still merge on their own.
     -F allow_auto_merge=true -F delete_branch_on_merge=true
   ```
 
-- [ ] **Create the App** (one App serves every repo you own; skip to the
+- [x] **Create the App** (one App serves every repo you own; skip to the
   install if you have it). **Settings > Developer settings > GitHub Apps >
   New GitHub App**: any name and homepage URL, webhook off, and repository
   permissions **Contents**, **Pull requests** and **Workflows** set to
   read and write. Workflows is there because Dependabot's actions bumps
   edit files under `.github/workflows/`. Note the **Client ID**, then
   generate a private key and save the `.pem`.
-- [ ] **Install the App** on this repo: the App's page > **Install App** >
+- [x] **Install the App** on this repo: the App's page > **Install App** >
   your account > **Only select repositories**.
-- [ ] **Add the two secrets as Dependabot secrets**, not Actions secrets.
+- [x] **Add the two secrets as Dependabot secrets**, not Actions secrets.
   A Dependabot-triggered run can read only Dependabot secrets.
 
   ```bash
@@ -171,7 +171,7 @@ the rest of the week's action bumps still merge on their own.
   the local `.pem` once the secret is set. If the key is needed again,
   generate a new one on the App's page and delete the old one there.
 
-- [ ] **Never add the App to the branch protection bypass list.** Its
+- [x] **Never add the App to the branch protection bypass list.** Its
   merges would then skip the required checks.
 - [ ] **Prove it.** With Dependabot security updates on (Code security,
   below) and an advisory open, a PR arrives right away, since security
@@ -181,7 +181,7 @@ the rest of the week's action bumps still merge on their own.
 
 ### Code security
 
-- [ ] **Settings > Code security and analysis** (`/settings/security_analysis`): Enable:
+- [x] **Settings > Code security and analysis** (`/settings/security_analysis`): Enable:
   - Private vulnerability reporting
   - Dependabot alerts
   - Dependabot security updates

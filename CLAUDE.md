@@ -1,6 +1,28 @@
-# Project Name
+# cargo-lockpatrol
 
-<!-- Replace with a one-line description of what this project does -->
+A cargo subcommand that runs `cargo deny check advisories` over every
+tracked `Cargo.lock` and keeps one GitHub issue current with the findings.
+
+## What this repo ships
+
+One tag releases three things that share one checker:
+
+- the crate and its binary `cargo-lockpatrol` (run as `cargo lockpatrol`):
+  `check` is the gate (exit 0 clean, 1 finding, 2 broken, 3 both), and
+  `render` turns the old issue body and a report into the new body and a
+  change comment;
+- a composite `action.yml` at the root, which downloads the release binary
+  for the runner, verifies it, and drives the issue with `gh`;
+- `.pre-commit-hooks.yaml`, for prek and pre-commit.
+
+None of the three exists yet. Until the first release, this repo's own
+advisory gate is the copy it got from the template: `scripts/check-advisories.sh`,
+`scripts/advisory-issue-body.py`, `scripts/test-check-advisories.sh`,
+`advisory-monitor.yml` and the two advisory hooks. Port every case in
+`test-check-advisories.sh` to a Rust test before deleting anything. After
+the release, switch this repo to its own action and hook at a pinned
+release (not a path into the working tree, so it tests what consumers
+get), then delete the copies.
 
 ## Development
 
@@ -81,8 +103,9 @@ updates, and the crate's Trusted Publisher (SETUP.md has each).
 
 ## Agent skills
 
-`skills/my-project/` is the skill this crate ships to consumers (see
-SETUP.md "Agent skill" to ship or delete it). Edits to it must bump
+`skills/cargo-lockpatrol/` is the skill this crate ships to consumers. It
+stays hidden (`metadata.internal: true`) until the first release, which
+removes that line. Edits to it must bump
 `metadata.version` in its `SKILL.md`; the pre-commit hook and the
 `Skill version guard` CI job both enforce that.
 
@@ -169,5 +192,3 @@ After a crate's first publish (the first release, or a crate new to the
 workspace), add `[policy.<crate>] audit-as-crates-io = false` to
 `supply-chain/config.toml`. Until it is there, `cargo vet` matches the
 path crate to its crates.io version and fails every push.
-
-<!-- Add custom skills under .claude/skills/ as needed -->
