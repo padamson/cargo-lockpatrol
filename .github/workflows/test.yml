@@ -1,0 +1,140 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+permissions:
+  contents: read
+
+jobs:
+  skill-version:
+    name: Skill version guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The pre-commit hook of the same name is per-clone and opt-in, so a
+    # hookless clone or a `--no-verify` commit would ship a skill edit
+    # without the version bump installed consumers key their updates on.
+    # Same script, run against the PR base or the tip before the push.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Compute diff base
+        id: base
+        uses: ./.github/actions/diff-base
+
+      # The script treats an unusable ref as an error; skipping when there
+      # is nothing to compare against is this job's call, not the script's.
+      - name: Check the skill version against the base
+        env:
+          BASE: ${{ steps.base.outputs.ref }}
+        run: |
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "No reachable base (first push, manual run, or rewritten history); nothing to compare."
+            exit 0
+          fi
+          scripts/check-skill-version-bumped.sh --base "$BASE"
+
+  msrv:
+    name: MSRV Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install MSRV toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.88"
+
+      # If your crate uses `include_bytes!` against build-generated
+      # artifacts (wasm pkgs, codegen output, etc.), stub them with
+      # `touch` here so `cargo check` succeeds — the bytes aren't
+      # exercised at compile time, only their existence on disk is.
+      - name: Check compilation on MSRV
+        run: cargo check --workspace
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: lint
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # nextest does not run doctests, so this is its own step. The
+      # crate keeps at least one doctest (the seed's `classify` has one),
+      # which is what makes this step honest; delete the step if the
+      # crate ever has none rather than running a no-op. The guard is on
+      # the library target, not on doctests: `cargo test --doc` errors
+      # outright on a bin-only crate, so the step goes with `src/lib.rs`.
+      - name: Run doc-tests
+        if: hashFiles('**/src/lib.rs') != ''
+        run: cargo test --doc --workspace
+
+      - name: Generate documentation
+        run: cargo doc --no-deps --workspace
+
+      - name: Verify the advisory checker classifies cargo-deny output
+        run: scripts/test-check-advisories.sh
+
+  test:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    # nextest's slow-timeout catches a hung test; this catches a hung
+    # runner or a wedged tool install.
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: test
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        with:
+          tool: cargo-nextest
+
+      - name: Build
+        run: cargo build --verbose
+
+      # `--profile ci` (.config/nextest.toml): retries on, so a retried
+      # pass is reported FLAKY instead of hiding, and a longer slow-timeout.
+      - name: Run tests
+        run: cargo nextest run --workspace --profile ci

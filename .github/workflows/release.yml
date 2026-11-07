@@ -1,0 +1,247 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# Job-scoped permissions: the default for every job is read-only, and
+# each job that writes names exactly what it writes. A build job running
+# third-party build scripts must not hold a token that can create a
+# release or mint attestations.
+permissions:
+  contents: read
+
+jobs:
+  # Each publishable crate against its latest crates.io release: a breaking
+  # change under a version that does not allow one fails here, before
+  # anything is built or published. On 0.x a minor bump (0.1 to 0.2)
+  # allows one.
+  semver-checks:
+    name: Semver Compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # A tag whose version no publishable crate carries is a release whose
+      # Cargo.toml bump was forgotten. Without this, the publish step would
+      # find the old version on crates.io, skip it, and go green having
+      # published nothing.
+      - name: Check the tag against the crate versions
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          if ! cargo metadata --no-deps --format-version 1 \
+               | jq -e --arg v "$tag" '[.packages[] | select(.publish != []) | .version] | index($v) != null' > /dev/null; then
+            echo "::error::no publishable crate is at version $tag; bump Cargo.toml"
+            exit 1
+          fi
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        with:
+          tool: cargo-semver-checks
+
+      # Only crates with a library target have an API to compare;
+      # cargo-semver-checks exits 1 on a binary-only or proc-macro crate, so
+      # those are listed and passed over. A crate not yet on crates.io has no
+      # baseline, so it is skipped too, but only on a 404. Any other answer
+      # (an outage, a rate limit) fails the job: skipping on it would release
+      # with no semver check at all. The loop reads the crate list on stdin,
+      # so the check (or a git fetch it starts) is kept off it, or it could
+      # swallow the crates after the first.
+      - name: Check semver compatibility
+        env:
+          USER_AGENT: ${{ github.repository }} release workflow (https://github.com/${{ github.repository }})
+        run: |
+          set -euo pipefail
+          metadata=$(cargo metadata --no-deps --format-version 1)
+          has_lib='any(.targets[]; any(.kind[]; . == "lib" or . == "rlib"))'
+          jq -r ".packages[] | select(.publish != []) | select($has_lib | not) | .name" <<< "$metadata" \
+            | while read -r crate; do echo "$crate has no library target; nothing to semver-check"; done
+          jq -r ".packages[] | select(.publish != []) | select($has_lib) | .name" <<< "$metadata" > "$RUNNER_TEMP/crates"
+          while read -r crate; do
+            status=$(curl -s -o /dev/null -w '%{http_code}' --retry 3 \
+                       -A "$USER_AGENT" "https://crates.io/api/v1/crates/$crate")
+            case "$status" in
+              200) cargo semver-checks check-release -p "$crate" </dev/null ;;
+              404) echo "$crate is not on crates.io yet; nothing to compare against" ;;
+              *)   echo "::error::crates.io answered $status for $crate"; exit 1 ;;
+            esac
+          done < "$RUNNER_TEMP/crates"
+
+  build-release:
+    name: Build ${{ matrix.target }}
+    needs: [semver-checks]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write       # create the GitHub Release and attach files
+      id-token: write       # provenance attestation
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Get version from tag
+        id: get_version
+        shell: bash
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+
+      # `matrix.target` in shared-key prevents the two macos matrix
+      # entries (x86_64 + aarch64 Apple Darwin) from clobbering each
+      # other's cache — Swatinem's auto-key includes runner.os but not
+      # the inline --target flag.
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: release-${{ matrix.target }}
+
+      - name: Install cargo-nextest & parse-changelog
+        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        with:
+          tool: cargo-nextest,parse-changelog
+
+      - name: Run tests
+        run: cargo nextest run --workspace --target ${{ matrix.target }}
+
+      # A failed release build fails the release. Library crates build
+      # fine here too; the binary-only steps below check for a binary
+      # before doing anything.
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }} --verbose
+
+      - name: Strip binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          BINARY_NAME=$(cargo metadata --no-deps --format-version 1 | python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; bins=[t['name'] for p in pkgs for t in p['targets'] if 'bin' in t['kind']]; print(bins[0] if bins else '')")
+          if [ -n "$BINARY_NAME" ] && [ -f "target/${{ matrix.target }}/release/$BINARY_NAME" ]; then
+            strip "target/${{ matrix.target }}/release/$BINARY_NAME"
+          fi
+
+      - name: Create archive (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          BINARY_NAME=$(cargo metadata --no-deps --format-version 1 | python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; bins=[t['name'] for p in pkgs for t in p['targets'] if 'bin' in t['kind']]; print(bins[0] if bins else '')")
+          if [ -n "$BINARY_NAME" ] && [ -f "target/${{ matrix.target }}/release/$BINARY_NAME" ]; then
+            tar czf "$BINARY_NAME-v${{ steps.get_version.outputs.version }}-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" "$BINARY_NAME"
+          fi
+
+      - name: Create archive (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          BINARY_NAME=$(cargo metadata --no-deps --format-version 1 | python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; bins=[t['name'] for p in pkgs for t in p['targets'] if 'bin' in t['kind']]; print(bins[0] if bins else '')")
+          if [ -n "$BINARY_NAME" ] && [ -f "target/${{ matrix.target }}/release/${BINARY_NAME}.exe" ]; then
+            7z a "${BINARY_NAME}-v${{ steps.get_version.outputs.version }}-${{ matrix.target }}.zip" "target/${{ matrix.target }}/release/${BINARY_NAME}.exe"
+          fi
+
+      - name: Generate release notes
+        shell: bash
+        run: parse-changelog CHANGELOG.md ${{ steps.get_version.outputs.version }} > release_notes.md
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        with:
+          files: |
+            *.tar.gz
+            *.zip
+          body_path: release_notes.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # A library crate produces no archive, and the action fails on an
+      # empty subject list. That is the only failure this tolerates; a
+      # binary crate whose attestation fails should look into it.
+      - name: Generate SLSA provenance attestation
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: |
+            *.tar.gz
+            *.zip
+        continue-on-error: true
+
+  publish-crates:
+    name: Publish to crates.io
+    needs: [build-release]
+    runs-on: ubuntu-latest
+    # Only publishing needs to mint an OIDC token, and `id-token: write`
+    # is what lets a job request one.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+
+      # Trusted publishing: exchange a GitHub OIDC token for a crates.io
+      # token scoped to this repo + workflow and valid for minutes,
+      # instead of holding a long-lived CARGO_REGISTRY_TOKEN that works
+      # from anywhere and never expires. The action's post step revokes
+      # it when the job ends. Configure the trusted publisher on
+      # crates.io first (SETUP.md); with none configured this step fails,
+      # which is correct. There is deliberately no "skip if not
+      # configured" guard and no `continue-on-error` on the publish: both
+      # turn a broken release into a green run with no crate.
+      - name: Authenticate to crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1
+
+      # SETUP.md has the first version published by hand, since a trusted
+      # publisher can only be added to a crate that exists, so the first
+      # tag finds its version already there. That case and a rerun are
+      # skipped with a line saying so, but only on a 200; a 404 publishes
+      # and any other answer fails the job. The tag check in semver-checks
+      # is what keeps a forgotten version bump from landing here as a skip. Each crate is checked at its
+      # own version. A workspace whose crates depend on each other must
+      # publish them in dependency order, which `cargo metadata` does not
+      # guarantee: list them by hand here (SETUP.md, "Converting to a
+      # workspace").
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          USER_AGENT: ${{ github.repository }} release workflow (https://github.com/${{ github.repository }})
+        run: |
+          set -euo pipefail
+          cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.publish != []) | "\(.name) \(.version)"' > "$RUNNER_TEMP/crates"
+          while read -r crate version; do
+            status=$(curl -s -o /dev/null -w '%{http_code}' --retry 3 \
+                       -A "$USER_AGENT" "https://crates.io/api/v1/crates/$crate/$version")
+            case "$status" in
+              200) echo "$crate $version is already on crates.io; skipping it" ;;
+              404) cargo publish -p "$crate" ;;
+              *)   echo "::error::crates.io answered $status for $crate $version"; exit 1 ;;
+            esac
+          done < "$RUNNER_TEMP/crates"

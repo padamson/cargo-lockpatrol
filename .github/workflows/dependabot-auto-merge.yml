@@ -1,0 +1,114 @@
+name: Dependabot auto-merge
+
+# Dependabot opens PRs but never merges them. This enables auto-merge on
+# every Dependabot PR but one kind (a PR that edits this file, below) so it
+# merges once the required status checks pass. Applies to all update types
+# (major, minor, patch); the status checks are the gate, so a bump that
+# breaks the build simply won't merge. Every job that should block a bump
+# must be a required status check (SETUP.md lists them).
+#
+# Auto-merge is enabled with a GitHub App token, not GITHUB_TOKEN. A merge
+# made with GITHUB_TOKEN triggers no workflows, so main would get no push
+# run: the tree that results from two sibling bumps merging would never be
+# tested, and push-only jobs would not run. The App's merge triggers them
+# like any other push. Branch protection keeps "require branches to be up
+# to date" off so green PRs merge without rebasing onto each sibling that
+# merged first; the push run on main is what tests the combination.
+#
+# The App needs Contents, Pull requests and Workflows (read and write) on
+# this repo; Workflows because Dependabot's actions bumps edit workflow
+# files. Its Client ID and private key are Dependabot secrets, the only
+# secrets a Dependabot-triggered run can read. It must not be allowed to
+# bypass branch protection, or its merges would skip the required checks.
+# SETUP.md walks through creating it.
+#
+# The one exception is a PR that edits this file, which is merged by hand.
+# A pull_request run takes the workflow and its action pins from the PR's
+# merge ref, so a bump of create-github-app-token would otherwise run the
+# new release with the App's private key before anyone reviewed it, and
+# that key mints tokens for every repo the App is installed on.
+# dependabot.yml keeps that bump out of the actions group, so its PR edits
+# this file from its first push and is never set to auto-merge. The check
+# is a job of its own, and the merge job needs it: the runner downloads
+# every action in a job and runs any `pre:` hook, with the inputs (the
+# private key among them) already evaluated, before the job's first step,
+# so a check inside the merge job would come too late.
+#
+# Any action added anywhere in this file goes in dependabot.yml's
+# exclude-patterns too. Otherwise its bump joins the actions group, edits
+# this file, and either arrives in a group PR already set to auto-merge or
+# holds the whole group.
+#
+# Private repos on a free plan have no branch protection and no native
+# auto-merge; use the self-gating variant from rust-service-template there.
+
+on: pull_request
+
+permissions: {}
+
+jobs:
+  hold:
+    name: Hold a PR that edits this workflow
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Only Dependabot's own PRs, never anyone else's: Dependabot wrote the
+    # PR (the actor alone is whoever acted last) and made this push. The
+    # merge job needs this one, so it is skipped whenever this is.
+    if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]' }}
+    permissions:
+      contents: read # list the PR's files
+    steps:
+      # The files come from the event's own base and head SHAs, the commit
+      # this run's workflow was loaded from, not from the PR as it stands
+      # now: a force-push between the two would otherwise check the wrong
+      # commit. (`gh pr diff` reads the current head, and fails outright
+      # past GitHub's diff size limit.) Each value is assigned before it is
+      # tested, since bash -e does not stop on a command inside an `if`: a
+      # failed `gh` or `jq` call fails the step, and the tests hold on
+      # anything but a clean pass, so an odd value holds the PR rather than
+      # arming it. The compare lists at most 300 files, so a list that long
+      # may have left this one out and is held too. A renamed file counts
+      # under its old name as well. The failure is deliberate and not a
+      # required check: a red check of this name on the PR is what says it
+      # waits on a person.
+      - name: Fail when the PR edits dependabot-auto-merge.yml
+        run: |
+          files="$(gh api "repos/$REPO/compare/$BASE_SHA...$HEAD_SHA" --jq '{count: (.files | length), names: [.files[] | .filename, (.previous_filename // empty)]}')"
+          count="$(jq '.count' <<<"$files")"
+          edits="$(jq 'any(.names[]; . == ".github/workflows/dependabot-auto-merge.yml")' <<<"$files")"
+          if ! [ "$count" -lt 300 ]; then
+            echo "::error::The compare lists 300 files, its limit, so it may leave out dependabot-auto-merge.yml. Review the PR and merge it by hand."
+            exit 1
+          fi
+          if [ "$edits" != false ]; then
+            echo "::error::This PR edits dependabot-auto-merge.yml. Review the bump and merge it by hand."
+            exit 1
+          fi
+        env:
+          REPO: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+
+  auto-merge:
+    name: Enable auto-merge
+    needs: hold
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The only action this workflow runs (see the header on adding one).
+      - name: Mint a token for the merge App
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.AUTOMERGE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+
+      - name: Enable auto-merge (squash)
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}

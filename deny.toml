@@ -1,0 +1,64 @@
+# cargo-deny configuration
+# Run: cargo deny check
+# Docs: https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+[advisories]
+# The only list of accepted RUSTSEC advisories. CI, the pre-commit hook
+# and the daily advisory monitor all run `cargo deny`, so nothing mirrors
+# this list and nothing can drift from it. Give each entry a reason:
+#   { id = "RUSTSEC-2026-XXXX", reason = "no fix upstream; not reachable from our call graph" }
+ignore = []
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "OpenSSL",
+    "BSL-1.0",
+    "CC0-1.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.8
+exceptions = []
+
+[licenses.private]
+ignore = false
+registries = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Path deps inside a workspace (`foo = { path = "../foo" }`) carry no
+# version and read as `*` to the wildcard check. This relaxes the check
+# only where cargo-deny allows it: path deps of `publish = false` crates,
+# and dev-dependencies. A publishable crate must still pin a version on
+# its path deps (crates.io requires one anyway). No-op in a single-crate
+# repo.
+allow-wildcard-paths = true
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

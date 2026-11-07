@@ -1,0 +1,42 @@
+# nextest configuration. nextest reads only this path.
+# Docs: https://nexte.st/docs/configuration/
+#
+# Profiles inherit from `default` unless a key is redefined, and
+# `[[profile.default.overrides]]` entries apply to `ci` too, so each
+# override is written once. The pre-commit hook runs the default profile;
+# CI runs `--profile ci`.
+
+[profile.default]
+# A hung test fails in two minutes instead of holding the job for six
+# hours. terminate-after counts periods: SIGTERM after 2 x 60s, SIGKILL
+# after the grace period. The result is TIMEOUT, which is a failure.
+slow-timeout = { period = "60s", terminate-after = 2 }
+# Child-process teardown can outlive nextest's 100ms default and read as
+# a leak. Raise it once the crate spawns processes; a genuine leak still
+# fails.
+leak-timeout = "1s"
+# No retries locally. A test that fails one run in three is a bug you
+# want to see, not a flake to paper over.
+
+[profile.ci]
+# See every failure in one run instead of one per push.
+fail-fast = false
+# Retries here only. A retried pass is reported FLAKY; treat it as a bug
+# report, and gate on it with `--flaky-result fail` once the suite is
+# clean.
+retries = 1
+slow-timeout = { period = "120s", terminate-after = 2 }
+# Add `junit = { path = "junit.xml" }` here only together with a CI step
+# that uploads or reads `target/nextest/ci/junit.xml`.
+
+# Tests that share a real resource (one database, one browser pool)
+# serialize in a group. An in-process mutex serializes nothing under
+# nextest's process-per-test model.
+#
+# [test-groups]
+# database = { max-threads = 1 }
+#
+# [[profile.default.overrides]]
+# filter = 'test(/postgres_/)'
+# test-group = 'database'
+# slow-timeout = { period = "180s", terminate-after = 1 }

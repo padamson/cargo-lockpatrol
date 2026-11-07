@@ -1,0 +1,136 @@
+# Pre-commit hooks for Rust projects
+# Install: cargo install prek && prek install
+# Run manually: prek run
+
+fail_fast: true
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-yaml
+        name: Check YAML syntax
+      - id: check-toml
+        name: Check TOML syntax
+      - id: check-merge-conflict
+        name: Check for merge conflicts
+      - id: check-case-conflict
+        name: Check for case conflicts
+      - id: detect-private-key
+        name: Detect private keys
+      # Byte-exact fixtures (golden files, recorded protocol traces,
+      # binary-ish text) must not be normalized by the whitespace hooks
+      # or the tests that compare against them go red. Exclude the
+      # fixture directories from all three:
+      #   exclude: ^tests/fixtures/
+      - id: trailing-whitespace
+        name: Trim trailing whitespace
+      - id: end-of-file-fixer
+        name: Fix end of files
+      - id: mixed-line-ending
+        name: Fix mixed line endings
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        description: Auto-format Rust code
+        entry: cargo fmt --all
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy
+        description: Run clippy linter
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-check
+        name: cargo check
+        description: Check Rust code compiles
+        entry: cargo check --workspace
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      # Keep this hook's feature set equal to the union of every
+      # `--features` CI passes to its test steps. A test gated behind a
+      # feature that only CI enables passes locally by never running,
+      # then fails on push. When you add `--features foo` to a CI test
+      # step, add it here in the same commit.
+      - id: cargo-nextest
+        name: cargo nextest run
+        description: Run tests with nextest
+        entry: cargo nextest run --workspace
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-doctest
+        name: cargo test --doc
+        description: Run documentation tests
+        entry: cargo test --doc --workspace
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      # cargo deny covers advisories too (it reads the RustSec database),
+      # so there is no separate `cargo audit` hook and only one ignore
+      # list, in `deny.toml`. Advisories go through the same script as the
+      # CI gate and the monitor, which reads every tracked Cargo.lock.
+      # Both are diff-gated on purpose: an advisory published overnight
+      # should not block an unrelated commit; the scheduled
+      # advisory-monitor workflow catches those.
+      - id: cargo-deny
+        name: cargo deny
+        description: Check licenses, bans, and source restrictions
+        entry: cargo deny --workspace check bans licenses sources
+        language: system
+        pass_filenames: false
+        files: (Cargo\.toml|Cargo\.lock|deny\.toml)$
+
+      - id: cargo-deny-advisories
+        name: cargo deny advisories (every lockfile)
+        description: Check every tracked Cargo.lock against the RustSec database
+        entry: scripts/check-advisories.sh
+        language: system
+        pass_filenames: false
+        files: (Cargo\.toml|Cargo\.lock|deny\.toml)$
+
+      - id: advisory-checker-classifies-output
+        name: advisory checker still tells a hit from a broken tool
+        description: the advisory monitor runs on a schedule nobody watches, so a misclassification is silent
+        entry: scripts/test-check-advisories.sh
+        language: system
+        pass_filenames: false
+        files: ^scripts/(check-advisories\.sh|test-check-advisories\.sh|advisory-issue-body\.py)$
+
+      # Skips until `cargo vet init` has run (see SETUP.md), mirroring
+      # the guard on the CI job, so the first commit of a new repo isn't
+      # blocked on supply-chain setup. The `files` regex must match paths
+      # *under* `supply-chain/`; an end-anchored `supply-chain/$` matches
+      # nothing, and the hook then never fires on the audit files vet
+      # exists to review.
+      - id: cargo-vet
+        name: cargo vet
+        description: Verify dependency supply chain audits
+        entry: bash -c 'test -f supply-chain/audits.toml && exec cargo vet; echo "supply-chain/ not initialized; skipping (run cargo vet init to enable)."'
+        language: system
+        pass_filenames: false
+        files: (Cargo\.toml$|Cargo\.lock$|^supply-chain/)
+
+      # A shipped skill's `metadata.version` is the only version an
+      # installed copy carries: `npx skills add` copies and compares
+      # nothing, so a content edit that leaves it alone is invisible to
+      # every consumer. The `Skill version guard` CI job runs the same
+      # script against the PR base.
+      - id: skill-version-bumped
+        name: skill version bumped
+        description: Skill edits must bump the version consumers compare against
+        entry: ./scripts/check-skill-version-bumped.sh
+        language: system
+        pass_filenames: false
+        files: ^skills/

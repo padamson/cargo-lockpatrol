@@ -1,0 +1,44 @@
+# cargo-mutants configuration. Live from the first clone: CI runs
+# `cargo mutants` regardless, and without this file the run is unscoped,
+# uses `cargo test`, and tests only the mutated package.
+# Docs: https://mutants.rs/config-file.html
+#
+# cargo-mutants reads `.cargo/mutants.toml` and nothing else. A config at
+# the repo root (`.mutants.toml`) is ignored silently: no warning, not
+# even a parse error for invalid TOML. Verify a change is live with a
+# filter that should visibly shrink `cargo mutants --list`.
+
+# nextest stops at the first failing test per mutant, so it is faster,
+# and it reports timeouts the same way the test job does.
+test_tool = "nextest"
+
+# Run the whole workspace's tests against each mutant, not just the
+# mutated package's. By default cargo-mutants runs only the mutated
+# package's tests, so a mutant whose killing test lives in another crate
+# survives silently. Don't add `--lib` to `additional_cargo_test_args`
+# for speed either: it skips `tests/` integration targets, even in a
+# single-crate project.
+test_workspace = true
+
+# Scope slow tests with a nextest filterset instead. This keeps every
+# target in the run and drops only the tests you name, e.g. e2e and
+# browser suites that no mutant in a logic crate can fail:
+# additional_cargo_test_args = ["-E", "not test(/e2e|slow/)"]
+
+# Limit which source files are mutated, by directory. Examples:
+#   - single-crate: ["src/**/*.rs"]
+#   - workspace, one focus crate: ["my-crate/src/**/*.rs"]
+#   - workspace, all crates: ["crates/*/src/**/*.rs"]
+examine_globs = ["src/**/*.rs"]
+
+# Keep codegen output and test doubles out of scope. Generated code
+# (panschema, prost, tonic, bindgen) has its source of truth in the
+# schema and its tests upstream, so mutating it only produces
+# surviving-mutant noise; a fake's behavior is whatever the test wants.
+# exclude_globs = ["src/generated/**/*.rs", "src/fakes.rs"]
+
+# Every exclude carries its equivalence argument next to it.
+# exclude_re = [
+#   # shoelace: += -> -= is .abs()'d two lines later, so the sign is lost
+#   "shoelace_area.*replace \\+= with -=",
+# ]

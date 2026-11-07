@@ -1,0 +1,293 @@
+name: Security & Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly Saturday 5am ET
+    - cron: '0 9 * * 6'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  # cargo deny is the single advisory gate (it reads the RustSec database
+  # like `cargo audit` does) as well as the license, bans and sources
+  # check. One tool means one ignore list, in `deny.toml`, that cannot
+  # drift from a mirrored copy here or in the pre-commit hook. Advisories
+  # run through scripts/check-advisories.sh, which covers every tracked
+  # Cargo.lock rather than the root one alone; `advisory-monitor.yml` runs
+  # the same script daily to catch advisories published between pushes.
+  deny:
+    name: License & Dependency Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        with:
+          tool: cargo-deny
+
+      - name: Run cargo deny
+        run: cargo deny --workspace check bans licenses sources
+
+      - name: Check advisories in every lockfile
+        run: scripts/check-advisories.sh
+
+  supply-chain:
+    name: Supply Chain Review
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Check for the audit file before installing anything: a repo that
+      # has not run `cargo vet init` yet skips in seconds instead of
+      # building cargo-vet first.
+      - name: Check for supply-chain/
+        id: vet
+        shell: bash
+        run: |
+          if [ -f supply-chain/audits.toml ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "supply-chain/ not initialized; skipping. Run 'cargo vet init' to enable."
+          fi
+
+      - name: Install Rust
+        if: steps.vet.outputs.enabled == 'true'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+
+      # Built from crates.io on purpose: install-action serves GitHub release
+      # binaries, and cargo-vet's newest release with binaries is 0.10.0,
+      # which cannot parse the `trusted-publisher` entries that 0.10.2
+      # (crates.io) writes. No cache step here, so the restored-binary
+      # failure `cargo install` has in the mutation jobs does not apply.
+      # `--locked` builds against cargo-vet's own Cargo.lock. No version pin
+      # on purpose: Dependabot cannot bump a `run:` line, and cargo-vet
+      # refuses a store written by a newer version, so a pinned CI copy
+      # older than a contributor's local one goes red.
+      - name: Install cargo-vet
+        if: steps.vet.outputs.enabled == 'true'
+        run: cargo install --locked cargo-vet
+
+      - name: Run cargo vet
+        if: steps.vet.outputs.enabled == 'true'
+        run: cargo vet
+
+  # The early signal for release.yml's semver gate, which runs only on the
+  # tag: by then the release commit is on main and the tag is public. Not a
+  # required check. Between releases Cargo.toml still carries the last
+  # released version, which cargo-semver-checks reads as a minor bump, so a
+  # red run means the next release needs a bigger bump than planned, not
+  # that the PR is wrong; on 0.x every deliberate break would otherwise
+  # block merging until the bump landed. The gate also sees only the breaks
+  # it has lints for (a changed return type passes), so the CHANGELOG's
+  # breaking entries are the other half of the check.
+  semver-preview:
+    name: Semver preview
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+
+      # The same crates and the same crates.io rules as release.yml's gate,
+      # plus one skip: a crate whose manifest still names the template's
+      # placeholder repository has the placeholder's name too, and the
+      # crates.io crate of that name is someone else's. That is this
+      # template itself, and a new repo until SETUP.md's search and replace.
+      # Listed before anything is cached or installed, so a repo with
+      # nothing to compare yet pays for neither.
+      - name: List the crates to compare
+        id: crates
+        env:
+          USER_AGENT: ${{ github.repository }} semver preview (https://github.com/${{ github.repository }})
+        run: |
+          set -euo pipefail
+          metadata=$(cargo metadata --no-deps --format-version 1)
+          has_lib='any(.targets[]; any(.kind[]; . == "lib" or . == "rlib"))'
+          placeholder='.repository == "https://github.com/OWNER/REPO"'
+          jq -r ".packages[] | select(.publish != []) | select($placeholder) | .name" <<< "$metadata" \
+            | while read -r crate; do echo "$crate still names the placeholder repository; nothing of its own on crates.io"; done
+          jq -r ".packages[] | select(.publish != []) | select($placeholder | not) | select($has_lib | not) | .name" <<< "$metadata" \
+            | while read -r crate; do echo "$crate has no library target; nothing to semver-check"; done
+          jq -r ".packages[] | select(.publish != []) | select($placeholder | not) | select($has_lib) | .name" <<< "$metadata" > "$RUNNER_TEMP/candidates"
+          : > "$RUNNER_TEMP/crates"
+          while read -r crate; do
+            status=$(curl -s -o /dev/null -w '%{http_code}' --retry 3 \
+                       -A "$USER_AGENT" "https://crates.io/api/v1/crates/$crate")
+            case "$status" in
+              200) echo "$crate" >> "$RUNNER_TEMP/crates" ;;
+              404) echo "$crate is not on crates.io yet; nothing to compare against" ;;
+              *)   echo "::error::crates.io answered $status for $crate"; exit 1 ;;
+            esac
+          done < "$RUNNER_TEMP/candidates"
+          if [ -s "$RUNNER_TEMP/crates" ]; then echo "any=true" >> "$GITHUB_OUTPUT"; fi
+
+      # Both the current tree and the crates.io baseline are built for
+      # rustdoc on every run; the cache carries both under target/.
+      - name: Cache Cargo
+        if: steps.crates.outputs.any == 'true'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: semver-preview
+
+      - name: Install cargo-semver-checks
+        if: steps.crates.outputs.any == 'true'
+        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        with:
+          tool: cargo-semver-checks
+
+      - name: Check semver against the last release
+        if: steps.crates.outputs.any == 'true'
+        run: |
+          set -euo pipefail
+          args=()
+          while read -r crate; do args+=(-p "$crate"); done < "$RUNNER_TEMP/crates"
+          cargo semver-checks check-release "${args[@]}"
+
+  mutation-testing:
+    name: Mutation Testing (full)
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    # Full-codebase mutation testing is a manual escape hatch only.
+    # Per-push verification is handled by `mutation-testing-diff` below,
+    # which scopes to just the lines a push or PR touched. The full run
+    # grows linearly with codebase size and eventually exceeds CI's
+    # per-job timeout, so we don't schedule it.
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: mutants
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        with:
+          tool: cargo-nextest
+
+      # Use prebuilt binary via taiki-e/install-action. `cargo install
+      # cargo-mutants` fails when the cargo cache restores a previously
+      # installed binary into `~/.cargo/bin/` (cargo install refuses to
+      # overwrite without --force); the action handles the
+      # already-installed case correctly and is ~10x faster anyway.
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        with:
+          tool: cargo-mutants
+
+      # Scope and speed come from `.cargo/mutants.toml`, the only path
+      # cargo-mutants reads; it ships live so a fresh clone never runs
+      # unscoped.
+      - name: Run mutation testing
+        run: cargo mutants
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: mutation-report
+          path: mutants.out/
+
+  mutation-testing-diff:
+    name: Mutation Testing (diff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Fast per-push variant: scopes to the lines touched in this push or
+    # pull request via `cargo mutants --in-diff`. Typical runtime is
+    # seconds-to-minutes rather than the full-codebase job's hours.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Need history beyond HEAD so `git diff` can reach the base
+          # commit (push: `before` SHA; PR: merge base of base ref).
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: mutants-diff
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        with:
+          tool: cargo-nextest
+
+      # Use prebuilt binary via taiki-e/install-action. `cargo install
+      # cargo-mutants` fails when the cargo cache restores a previously
+      # installed binary into `~/.cargo/bin/` (cargo install refuses to
+      # overwrite without --force); the action handles the
+      # already-installed case correctly and is ~10x faster anyway.
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        with:
+          tool: cargo-mutants
+
+      # If a job ever needs a tool built from a git branch (a fork, or a
+      # producer's `main` you are dogfooding), resolve the branch to a
+      # SHA in one step and install by `--rev` in the next. Never
+      # `--branch`: the branch can move between the resolve and the
+      # build, and the cargo cache then holds a binary nobody can trace
+      # to a commit. `--locked` keeps the tool's own lockfile, `--force`
+      # replaces a cached binary.
+      #
+      #   - name: Resolve tool revision
+      #     id: tool
+      #     run: echo "rev=$(git ls-remote https://github.com/OWNER/TOOL.git refs/heads/main | cut -f1)" >> "$GITHUB_OUTPUT"
+      #   - name: Install tool
+      #     run: cargo install --locked --force --git https://github.com/OWNER/TOOL.git --rev ${{ steps.tool.outputs.rev }} TOOL
+
+      # On a branch's first push the action returns no ref, and
+      # `scripts/mutants.sh` then applies its own default: HEAD~1, or
+      # git's empty tree when HEAD is the repo's root commit. Passing
+      # `HEAD~1` explicitly would make the script fail on a root commit,
+      # since a caller-supplied ref must resolve.
+      - name: Compute diff base
+        id: base
+        uses: ./.github/actions/diff-base
+
+      - name: Run mutation testing on diff
+        run: ./scripts/mutants.sh ${{ steps.base.outputs.ref }}
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: mutation-report-diff
+          path: mutants.out/

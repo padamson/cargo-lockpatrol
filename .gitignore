@@ -1,0 +1,28 @@
+# Build artifacts
+/target
+
+# cargo-mutants output (current run + rotated previous run)
+/mutants.out/
+/mutants.out.old/
+
+# Environment variables (secrets, config)
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+
+# Agent skills installed with `npx skills add` (the skill of each tool this
+# crate depends on). The pin lives in skills-lock.json, which is tracked;
+# the content is fetched, so it is not vendored here. The Claude Code entry
+# points are symlinks into .agents/, and a tracked symlink would dangle in
+# any clone that has not run the install. A crate that uses its own shipped
+# skill in-repo adds `!/.claude/skills/<name>` here and tracks that one
+# symlink, whose target lives under skills/ (see SETUP.md).
+/.agents/
+/.claude/skills/

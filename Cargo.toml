@@ -1,0 +1,28 @@
+[package]
+name = "my-project"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+description = "A short description of your project"
+repository = "https://github.com/OWNER/REPO"
+authors = ["Your Name"]
+categories = []
+keywords = []
+
+[lints.rust]
+# Nothing here has a reason to reach for unsafe. `deny` (not `forbid`)
+# leaves a targeted `#[allow(unsafe_code)]` escape hatch if a future FFI
+# edge genuinely needs one.
+unsafe_code = "deny"
+
+# The place for the clippy lints this crate turns on; the template imposes
+# none. After converting to a workspace (SETUP.md), move both tables to
+# `[workspace.lints.*]` and give each crate `[lints] workspace = true`.
+[lints.clippy]
+
+[dependencies]
+
+[dev-dependencies]
+# Scratch directories for the integration-test fixture in tests/common.
+tempfile = "3"
