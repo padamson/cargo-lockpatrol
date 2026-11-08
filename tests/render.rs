@@ -85,6 +85,38 @@ fn the_run_url_reaches_the_comment() {
     );
 }
 
+/// The body the template's scripts wrote before they rewrote it whole,
+/// with a triage note above the markers around the report.
+fn marked_with_a_note() -> String {
+    format!(
+        "A triage note.\n\n<!-- advisory-report -->\n```\n{REPORT}```\n<!-- /advisory-report -->\n"
+    )
+}
+
+// The notes alone make the issue `changed`, so the action posts the
+// comment that carries them.
+#[test]
+fn a_note_beside_a_marked_report_prints_changed() {
+    let (out, _) = render(&marked_with_a_note(), &[]);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "changed\n",
+        "{}",
+        shown(&out)
+    );
+}
+
+#[test]
+fn a_note_beside_a_marked_report_reaches_the_comment() {
+    let (out, ws) = render(&marked_with_a_note(), &[]);
+    let comment = read(&ws, "comment.md");
+    assert!(
+        comment.contains("\n```\nA triage note.\n```\n"),
+        "{}\n--- comment\n{comment}",
+        shown(&out)
+    );
+}
+
 #[test]
 fn a_missing_old_body_is_broken_and_named() {
     let ws = Workspace::new();

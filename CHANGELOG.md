@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- An issue body from the template's older scripts, which kept the report between `<!-- advisory-report -->` markers, is read from between the markers, so a code block in a triage note above them no longer reads as the report and announces every finding as new
+- Triage notes kept beside the report in such a body move into a comment on the first run instead of being dropped with the old body
+
 ## [0.1.0] - 2026-11-08
 
 ### Added

@@ -31,8 +31,9 @@ cargo lockpatrol render <OLD> <REPORT> <OUT> <COMMENT> [--run-url <URL>]
 
 The monitor's step, rarely run by hand. Reads the issue's old body (an
 empty file when there is none) and a `check` report, writes the new body
-and a comment, and prints `changed` (findings came or went: edit the body
-and post the comment), `refreshed` (the same findings in other words: edit
+and a comment, and prints `changed` (findings came or went, or the old
+body kept notes beside its report, which the comment carries: edit the
+body and post the comment), `refreshed` (the same findings in other words: edit
 the body only) or `unchanged` (touch nothing).
 
 ## The GitHub Action
@@ -52,9 +53,10 @@ Outputs: `result` (`clean`, `finding`, `broken` or `both`) and `report`
 
 The monitor needs `permissions: issues: write`. It opens the issue on a
 finding, edits the body when the findings or their wording change,
-comments only when findings come or go, closes the issue when every tree
-is clean, and leaves an open issue alone when a tree is broken (the
-report is partial). The step fails on `broken` and `both`.
+comments only when findings come or go or notes leave the body, closes
+the issue when every tree is clean, and leaves an open issue alone when
+a tree is broken (the report is partial). The step fails on `broken` and
+`both`.
 
 ## Hooks
 

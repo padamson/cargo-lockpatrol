@@ -233,11 +233,11 @@ fn render_files(
     let write = |p: &Path, text: &str| {
         std::fs::write(p, text).map_err(|e| format!("could not write {}: {e}", p.display()))
     };
-    let rendered = render::render(&read(old)?, &read(report)?);
+    let (rendered, notes) = render::render_and_notes(&read(old)?, &read(report)?);
     write(out, &rendered.body)?;
     write(
         comment,
-        &render::comment(&rendered.resolved, &rendered.new, run_url),
+        &render::comment_with_notes(&rendered.resolved, &rendered.new, notes.as_deref(), run_url),
     )?;
     Ok(rendered.status)
 }

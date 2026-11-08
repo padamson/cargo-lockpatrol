@@ -4,8 +4,9 @@
 //! The body is rewritten whole on every run, so triage notes go in
 //! comments. Findings are compared by identity, not text, so a finding
 //! reported in different words (a retitled advisory, a new solution line)
-//! only refreshes the body, and only a finding that came or went posts a
-//! comment.
+//! only refreshes the body. A finding that came or went posts a comment,
+//! and so do triage notes the first run moves out of a body an older
+//! script kept them beside.
 //!
 //! ```
 //! use cargo_lockpatrol::render::{render, Status};
@@ -70,7 +71,8 @@ pub struct Key {
 /// What an open issue needs after a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
-    /// The findings changed: edit the body and post the comment.
+    /// The findings changed, or ([`render_and_notes`] alone) the old body
+    /// held notes the new one drops: edit the body and post the comment.
     Changed,
     /// The same findings, reported differently: edit the body only.
     Refreshed,
@@ -153,11 +155,30 @@ pub fn findings(text: &str) -> Vec<(Key, String)> {
         .collect()
 }
 
-/// The report inside a body this module wrote: its first fenced block.
-/// [`fenced`] makes the fence longer than any backtick run inside, so the
-/// first line that repeats it closes the block.
+/// The lines around the report in a body the template's scripts wrote
+/// before they rewrote it whole, where triage notes could sit beside it.
+const START: &str = "<!-- advisory-report -->";
+const END: &str = "<!-- /advisory-report -->";
+
+/// Where the markers sit in `lines`: the last start marker before the last
+/// end marker, each a whole line (trailing whitespace aside, which a hand
+/// edit can leave), as the scripts that wrote them read them.
+fn marked_span(lines: &[&str]) -> Option<(usize, usize)> {
+    let end = lines.iter().rposition(|l| l.trim_end() == END)?;
+    let start = lines[..end].iter().rposition(|l| l.trim_end() == START)?;
+    Some((start, end))
+}
+
+/// The report inside a body: its first fenced block, between the markers
+/// when the body has them, so a fence in a note beside a marked report is
+/// not read as the report. [`fenced`] makes the fence longer than any
+/// backtick run inside, so the first line that repeats it closes the block.
 fn written_report(body: &str) -> Option<String> {
-    let lines: Vec<&str> = body.split('\n').collect();
+    let mut lines: Vec<&str> = body.split('\n').collect();
+    // The start marker is no fence, so the search can begin on it.
+    if let Some((start, end)) = marked_span(&lines) {
+        lines = lines[start..end].to_vec();
+    }
     lines.iter().enumerate().find_map(|(i, fence)| {
         if fence.len() < 3 || !fence.bytes().all(|b| b == b'`') {
             return None;
@@ -247,12 +268,29 @@ fn by_id(found: BTreeMap<Key, String>) -> BTreeMap<Key, String> {
         .collect()
 }
 
+/// `text` with LF endings. A body saved from GitHub's web editor has CRLF
+/// endings, and an untouched report must still compare equal.
+fn lf(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+/// [`render`], with the notes `old` held beside a marked report, which
+/// the new body drops and [`comment_with_notes`] carries. Notes alone make
+/// the status [`Status::Changed`], so the comment is posted.
+pub fn render_and_notes(old: &str, report: &str) -> (Rendered, Option<String>) {
+    let mut rendered = render(old, report);
+    let notes = moved_notes(old);
+    if rendered.status == Status::Refreshed && notes.is_some() {
+        rendered.status = Status::Changed;
+    }
+    (rendered, notes)
+}
+
 /// The new body for `report`, and how it differs from `old`, the open
-/// issue's body (empty when there is none).
+/// issue's body (empty when there is none). The status follows the
+/// findings alone: [`comment`] cannot carry notes `old` held beside a
+/// marked report, so a caller that posts them uses [`render_and_notes`].
 pub fn render(old: &str, report: &str) -> Rendered {
-    // A body saved from GitHub's web editor has CRLF endings, and an
-    // untouched report must still compare equal.
-    let lf = |text: &str| text.replace("\r\n", "\n").replace('\r', "\n");
     let (old, report) = (lf(old), lf(report));
     let report = report.as_str();
     let room = LIMIT - INTRO.chars().count() - FOOTER.chars().count();
@@ -312,22 +350,109 @@ fn label(key: &Key, headline: &str) -> String {
     }
 }
 
-fn listing(heading: &str, items: &BTreeMap<Key, String>) -> Vec<String> {
-    if items.is_empty() {
+/// `heading`, then the leading `lines` that fit in `room`, fenced, with
+/// `more` saying how many the cut left out. Nothing when `lines` is empty.
+fn listing(
+    heading: &str,
+    lines: &[String],
+    room: usize,
+    more: impl Fn(usize) -> String,
+) -> Vec<String> {
+    if lines.is_empty() {
         return Vec::new();
     }
-    let lines: Vec<String> = items.iter().map(|(k, h)| label(k, h)).collect();
-    let mut kept = fit(&lines, LIMIT / 2).to_vec();
+    let mut kept = fit(lines, room).to_vec();
     let left_out = lines.len() - kept.len();
     if left_out > 0 {
         kept.push(String::new());
-        kept.push(format!("({left_out} more not shown)"));
+        kept.push(more(left_out));
     }
-    vec![
-        format!("{heading}:"),
-        fenced(&kept.join("\n")),
-        String::new(),
-    ]
+    vec![heading.to_owned(), fenced(&kept.join("\n")), String::new()]
+}
+
+/// The intros the template's scripts opened a marked body with, the
+/// template's own first.
+const MARKED_INTROS: [&str; 3] = [
+    include_str!("render/marked-intro-template.md"),
+    include_str!("render/marked-intro-mdbook-listings.md"),
+    include_str!("render/marked-intro-playwright-rust.md"),
+];
+
+/// `text` after a leading `prefix`, word by word, so a prefix someone
+/// reflowed or left trailing spaces in still matches.
+fn strip_words<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    prefix
+        .split_whitespace()
+        .try_fold(text, |rest, word| rest.trim_start().strip_prefix(word))
+}
+
+/// The line a marked body closed with.
+const MARKED_FOOTER: &str = "_Maintained automatically by the Security Advisory Monitor workflow._";
+
+const CHANGED: &str = "The advisory findings changed.";
+
+/// What a marked body held beside its report other than the intro and
+/// footer a script wrote: notes someone added, which a body rewritten whole
+/// drops. `None` for a body with no markers or nothing beside them. Text
+/// above the report under an intro this crate does not know moves whole.
+fn moved_notes(old: &str) -> Option<String> {
+    let old = lf(old);
+    let lines: Vec<&str> = old.split('\n').collect();
+    let (start, end) = marked_span(&lines)?;
+    let before = lines[..start].join("\n");
+    let before = MARKED_INTROS
+        .iter()
+        .find_map(|intro| strip_words(&before, intro))
+        .unwrap_or(&before);
+    let after = lines[end + 1..].join("\n");
+    let after = after.trim_end();
+    let after = after.strip_suffix(MARKED_FOOTER).unwrap_or(after);
+    let notes: Vec<&str> = [before.trim(), after.trim()]
+        .into_iter()
+        .filter(|n| !n.is_empty())
+        .collect();
+    (!notes.is_empty()).then(|| notes.join("\n\n"))
+}
+
+/// The comment for a [`Status::Changed`] issue, as [`comment`] writes it,
+/// followed by `notes`, as [`render_and_notes`] returns them, when there
+/// are any. The notes are fenced, so an @-mention in one does not notify
+/// again, and cut to what the size limit leaves beside the findings. A
+/// comment carrying only notes does not say the findings changed.
+pub fn comment_with_notes(
+    resolved: &BTreeMap<Key, String>,
+    new: &BTreeMap<Key, String>,
+    notes: Option<&str>,
+    run_url: Option<&str>,
+) -> String {
+    let labels = |items: &BTreeMap<Key, String>| -> Vec<String> {
+        items.iter().map(|(k, h)| label(k, h)).collect()
+    };
+    let more = |n| format!("({n} more not shown)");
+    let mut lines = Vec::new();
+    if notes.is_none() || !(new.is_empty() && resolved.is_empty()) {
+        lines.extend([CHANGED.to_owned(), String::new()]);
+    }
+    for (heading, items) in [("New:", new), ("Resolved:", resolved)] {
+        lines.extend(listing(heading, &labels(items), LIMIT / 2, more));
+    }
+    if let Some(notes) = notes {
+        let heading = "This issue's body is now rewritten whole on every run, so the \
+                       notes it held beside the report are moved here:";
+        let more = |n| format!("({n} more lines not shown; the body's edit history has them.)");
+        let notes: Vec<String> = notes.split('\n').map(str::to_owned).collect();
+        // The notes get what the limit leaves after the findings, the
+        // heading and the cut note at its longest; the fences and the
+        // run-log line are what the limit's own margin is for.
+        let used = lines.join("\n").chars().count()
+            + heading.chars().count()
+            + more(notes.len()).chars().count();
+        lines.extend(listing(heading, &notes, LIMIT.saturating_sub(used), more));
+    }
+    lines.push(run_url.map_or_else(String::new, |url| {
+        format!("The issue body has the new report, and [the run log]({url}) has it in full.")
+    }));
+    lines.join("\n")
 }
 
 /// The comment for a [`Status::Changed`] issue: the findings that came and
@@ -338,13 +463,7 @@ pub fn comment(
     new: &BTreeMap<Key, String>,
     run_url: Option<&str>,
 ) -> String {
-    let mut lines = vec!["The advisory findings changed.".to_string(), String::new()];
-    lines.extend(listing("New", new));
-    lines.extend(listing("Resolved", resolved));
-    lines.push(run_url.map_or_else(String::new, |url| {
-        format!("The issue body has the new report, and [the run log]({url}) has it in full.")
-    }));
-    lines.join("\n")
+    comment_with_notes(resolved, new, None, run_url)
 }
 
 #[cfg(test)]
@@ -392,6 +511,23 @@ mod tests {
 
     const TEMPLATE_REPORT: &str = include_str!("../tests/fixtures/render/template-report.txt");
     const TEMPLATE_BODY: &str = include_str!("../tests/fixtures/render/template-body.md");
+
+    fn footer() -> String {
+        format!("\n\n{MARKED_FOOTER}\n")
+    }
+
+    /// A body in the shape the template's scripts wrote before they
+    /// rewrote it whole: the report between two markers, with `before` and
+    /// `after` around them, where a triage note could sit.
+    fn marked(before: &str, report: &str, after: &str) -> String {
+        format!(
+            "{before}<!-- advisory-report -->\n{}\n<!-- /advisory-report -->{after}",
+            fenced(report.trim_end_matches('\n'))
+        )
+    }
+
+    const FENCED_NOTE: &str = "Pinned until upstream ships the fix:\n\
+        ```\ncargo update -p smallvec --precise 1.6.1\n```\n\n";
 
     /// `n` findings of one advisory, each under its own lockfile, as a
     /// comment listing takes them.
@@ -469,6 +605,194 @@ mod tests {
     fn a_template_issue_body_refreshes_on_the_same_findings() {
         let rendered = render(TEMPLATE_BODY, &report(&[("Cargo.lock", TWO)]));
         assert_eq!(rendered.status, Status::Refreshed, "{rendered:?}");
+    }
+
+    #[test]
+    fn a_fence_in_a_note_above_a_marked_report_is_not_read_as_the_report() {
+        let old = marked(
+            &format!("{}{FENCED_NOTE}", MARKED_INTROS[0]),
+            TEMPLATE_REPORT,
+            &footer(),
+        );
+        let rendered = render(&old, &report(&[("Cargo.lock", TWO)]));
+        assert_eq!(keys(&rendered.new), vec![]);
+    }
+
+    #[test]
+    fn a_marker_line_with_trailing_whitespace_still_marks_the_report() {
+        let old = marked(
+            &format!("{}{FENCED_NOTE}", MARKED_INTROS[0]),
+            TEMPLATE_REPORT,
+            &footer(),
+        )
+        .replace(START, &format!("{START}  "));
+        let rendered = render(&old, &report(&[("Cargo.lock", TWO)]));
+        assert_eq!(keys(&rendered.new), vec![]);
+    }
+
+    const NOTE_ABOVE: &str = "Waiting on bincode's successor; see #12.";
+    const NOTE_BELOW: &str = "Accepted until 2027-01.";
+
+    fn marked_with_notes() -> String {
+        marked(
+            &format!("{}{NOTE_ABOVE}\n\n", MARKED_INTROS[0]),
+            TEMPLATE_REPORT,
+            &format!("\n\n{NOTE_BELOW}{}", footer()),
+        )
+    }
+
+    #[test]
+    fn the_notes_above_and_below_a_marked_report_are_what_moves() {
+        assert_eq!(
+            moved_notes(&marked_with_notes()),
+            Some(format!("{NOTE_ABOVE}\n\n{NOTE_BELOW}"))
+        );
+    }
+
+    #[test]
+    fn a_marked_body_holding_only_what_a_script_wrote_moves_nothing() {
+        for intro in MARKED_INTROS {
+            let old = marked(intro, TEMPLATE_REPORT, &footer());
+            assert_eq!(moved_notes(&old), None, "under the intro\n{intro}");
+        }
+    }
+
+    #[test]
+    fn a_marked_body_saved_with_crlf_endings_moves_only_its_notes() {
+        let old = marked_with_notes().replace('\n', "\r\n");
+        assert_eq!(
+            moved_notes(&old),
+            Some(format!("{NOTE_ABOVE}\n\n{NOTE_BELOW}"))
+        );
+    }
+
+    // A script copy with an intro this crate has not seen loses nothing:
+    // all of it moves.
+    #[test]
+    fn text_above_a_marked_report_in_no_known_intro_moves_whole() {
+        let old = marked("A body written by hand.\n\n", TEMPLATE_REPORT, &footer());
+        assert_eq!(
+            moved_notes(&old),
+            Some("A body written by hand.".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_intro_reflowed_or_with_trailing_spaces_is_not_a_note() {
+        let intro = MARKED_INTROS[0]
+            .replace("is\naffecting", "is affecting")
+            .replace('\n', "  \n");
+        let old = marked(
+            &format!("{intro}{NOTE_ABOVE}\n\n"),
+            TEMPLATE_REPORT,
+            &footer(),
+        );
+        assert_eq!(moved_notes(&old), Some(NOTE_ABOVE.to_owned()));
+    }
+
+    #[test]
+    fn a_body_with_no_markers_moves_nothing() {
+        assert_eq!(moved_notes(TEMPLATE_BODY), None);
+    }
+
+    #[test]
+    fn notes_beside_a_marked_report_with_the_same_findings_make_it_changed() {
+        let (rendered, _) = render_and_notes(&marked_with_notes(), &report(&[("Cargo.lock", TWO)]));
+        assert_eq!(rendered.status, Status::Changed);
+    }
+
+    // `render` and `comment` are the 0.1.0 pair, and `comment` cannot carry
+    // the notes, so for them nothing beside the findings changed.
+    #[test]
+    fn render_alone_reads_notes_beside_the_same_findings_as_a_refresh() {
+        let rendered = render(&marked_with_notes(), &report(&[("Cargo.lock", TWO)]));
+        assert_eq!(rendered.status, Status::Refreshed);
+    }
+
+    #[test]
+    fn a_marked_report_with_no_notes_and_the_same_findings_refreshes() {
+        let old = marked(MARKED_INTROS[0], TEMPLATE_REPORT, &footer());
+        let rendered = render(&old, &report(&[("Cargo.lock", TWO)]));
+        assert_eq!(rendered.status, Status::Refreshed);
+    }
+
+    #[test]
+    fn render_and_notes_refreshes_a_marked_report_with_no_notes_and_the_same_findings() {
+        let old = marked(MARKED_INTROS[0], TEMPLATE_REPORT, &footer());
+        let (rendered, _) = render_and_notes(&old, &report(&[("Cargo.lock", TWO)]));
+        assert_eq!(rendered.status, Status::Refreshed);
+    }
+
+    // Fenced, so an @-mention in a note does not notify anyone again.
+    #[test]
+    fn moved_notes_are_fenced_in_the_comment() {
+        let none = BTreeMap::new();
+        let c = comment_with_notes(&none, &none, Some("Ask @someone"), None);
+        assert!(c.contains(&fenced("Ask @someone")), "{c}");
+    }
+
+    #[test]
+    fn a_comment_moving_notes_alone_does_not_say_the_findings_changed() {
+        let none = BTreeMap::new();
+        let c = comment_with_notes(&none, &none, Some("A note."), None);
+        assert!(!c.contains(CHANGED), "{c}");
+    }
+
+    // As in 0.1.0, where a caller could post whatever `comment` returned.
+    #[test]
+    fn a_comment_without_notes_opens_by_saying_the_findings_changed() {
+        let none = BTreeMap::new();
+        let c = comment(&none, &none, None);
+        assert!(c.starts_with(CHANGED), "{c:?}");
+    }
+
+    #[test]
+    fn a_comment_with_new_findings_and_notes_says_the_findings_changed() {
+        let c = comment_with_notes(&BTreeMap::new(), &many_new(1), Some("A note."), None);
+        assert!(c.starts_with(CHANGED), "{c}");
+    }
+
+    /// A comment moving 2000 lines of notes, more than fit beside 500 new
+    /// findings.
+    fn comment_with_long_notes() -> String {
+        let notes: Vec<String> = (0..2000).map(|i| format!("{i:>40}")).collect();
+        comment_with_notes(
+            &BTreeMap::new(),
+            &many_new(500),
+            Some(&notes.join("\n")),
+            None,
+        )
+    }
+
+    // 800 changed findings fill more than half the limit, and the notes
+    // get what is left, not nothing.
+    #[test]
+    fn notes_get_the_room_the_findings_leave_in_the_comment() {
+        let c = comment_with_notes(&many_new(300), &many_new(500), Some("A note."), None);
+        assert!(c.contains("\nA note.\n"), "{c}");
+    }
+
+    // The two fences, their newlines and the blank line before the cut
+    // note add 13 to the budget; GitHub's own limit, 65536, is further off.
+    // Under it, no note line left out (41 characters each) would have fit.
+    #[test]
+    fn moved_notes_too_long_for_the_comment_fill_its_budget_and_no_more() {
+        let size = comment_with_long_notes().chars().count();
+        assert!(
+            LIMIT - 100 < size && size <= LIMIT + 13,
+            "{size} characters"
+        );
+    }
+
+    #[test]
+    fn moved_notes_cut_to_fit_say_how_many_lines_were_left_out() {
+        let c = comment_with_long_notes();
+        let shown = c
+            .lines()
+            .filter(|l| l.len() == 40 && l.trim_start().parse::<u32>().is_ok())
+            .count();
+        let note = format!("({} more lines not shown", 2000 - shown);
+        assert!(c.contains(&note), "{note}\n{c}");
     }
 
     #[test]

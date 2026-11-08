@@ -3,7 +3,7 @@ name: cargo-lockpatrol
 description: Use when a repo checks RustSec advisories with cargo-deny through cargo-lockpatrol, or is replacing copied scripts/check-advisories.sh and advisory-monitor.yml with its GitHub Action and pre-commit hook; covers the check exit codes, pinning the action and hook by SHA, and the tracking issue.
 license: MIT OR Apache-2.0
 metadata:
-  version: "1.0.1"
+  version: "1.0.2"
 ---
 
 # cargo-lockpatrol
@@ -66,7 +66,10 @@ Then switch in one change:
    `ISSUE_LABEL` env; keep `issues: write`, the schedule and the
    concurrency group. The default `issue-title` and `issue-label` match
    the script's, so the open issue is found, and its body is read as the
-   same findings: the first run only refreshes it.
+   same findings: the first run only refreshes it. The exception is a body
+   from scripts older than the template's whole-body rewrite, which kept
+   triage notes around `<!-- advisory-report -->` markers: the first run
+   moves those notes into a comment.
 2. In the Security workflow, replace `scripts/check-advisories.sh` with the
    action as a gate, after the same cargo-deny install.
 3. In `.pre-commit-config.yaml`, replace the `cargo-deny-advisories` and
