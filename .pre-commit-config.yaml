@@ -80,8 +80,7 @@ repos:
 
       # cargo deny covers advisories too (it reads the RustSec database),
       # so there is no separate `cargo audit` hook and only one ignore
-      # list, in `deny.toml`. Advisories go through the same script as the
-      # CI gate and the monitor, which reads every tracked Cargo.lock.
+      # list, in `deny.toml`. Advisories go through cargo-lockpatrol, below.
       # Both are diff-gated on purpose: an advisory published overnight
       # should not block an unrelated commit; the scheduled
       # advisory-monitor workflow catches those.
@@ -92,22 +91,6 @@ repos:
         language: system
         pass_filenames: false
         files: (Cargo\.toml|Cargo\.lock|deny\.toml)$
-
-      - id: cargo-deny-advisories
-        name: cargo deny advisories (every lockfile)
-        description: Check every tracked Cargo.lock against the RustSec database
-        entry: scripts/check-advisories.sh
-        language: system
-        pass_filenames: false
-        files: (Cargo\.toml|Cargo\.lock|deny\.toml)$
-
-      - id: advisory-checker-classifies-output
-        name: advisory checker still tells a hit from a broken tool
-        description: the advisory monitor runs on a schedule nobody watches, so a misclassification is silent
-        entry: scripts/test-check-advisories.sh
-        language: system
-        pass_filenames: false
-        files: ^scripts/(check-advisories\.sh|test-check-advisories\.sh|advisory-issue-body\.py)$
 
       # Skips until `cargo vet init` has run (see SETUP.md), mirroring
       # the guard on the CI job, so the first commit of a new repo isn't
@@ -135,3 +118,9 @@ repos:
         language: system
         pass_filenames: false
         files: ^skills/
+
+  # The released hook, as consumers pin it, not this working tree.
+  - repo: https://github.com/padamson/cargo-lockpatrol
+    rev: dd236f9ba1cce97d3cde4b739b7819d76927412f  # frozen: v0.1.0
+    hooks:
+      - id: cargo-lockpatrol

@@ -21,9 +21,9 @@ jobs:
   # like `cargo audit` does) as well as the license, bans and sources
   # check. One tool means one ignore list, in `deny.toml`, that cannot
   # drift from a mirrored copy here or in the pre-commit hook. Advisories
-  # run through scripts/check-advisories.sh, which covers every tracked
-  # Cargo.lock rather than the root one alone; `advisory-monitor.yml` runs
-  # the same script daily to catch advisories published between pushes.
+  # run through this crate's own action at its latest release, which
+  # covers every tracked Cargo.lock; `advisory-monitor.yml` runs it daily
+  # to catch advisories published between pushes.
   deny:
     name: License & Dependency Check
     runs-on: ubuntu-latest
@@ -45,7 +45,7 @@ jobs:
         run: cargo deny --workspace check bans licenses sources
 
       - name: Check advisories in every lockfile
-        run: scripts/check-advisories.sh
+        uses: padamson/cargo-lockpatrol@dd236f9ba1cce97d3cde4b739b7819d76927412f # v0.1.0
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2

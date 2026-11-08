@@ -15,13 +15,11 @@ One tag releases three things that share one checker:
   for the runner, verifies it, and drives the issue with `gh`;
 - `.pre-commit-hooks.yaml`, for prek and pre-commit.
 
-This repo's own advisory gate is still the copy it got from the template:
-`scripts/check-advisories.sh`, `scripts/advisory-issue-body.py`,
-`scripts/test-check-advisories.sh`, `advisory-monitor.yml` and the two
-advisory hooks. Every case in `test-check-advisories.sh` has a Rust test.
-Once v0.1.0 is tagged, switch this repo to its own action and hook at the
-pinned release (not a path into the working tree, so it tests what
-consumers get), then delete the copies.
+This repo gates itself with its own action and hook, pinned to the latest
+release's commit (not a path into the working tree, so CI tests what
+consumers get). After a release, move the pin in `security.yml`,
+`advisory-monitor.yml` and `.pre-commit-config.yaml` to the new tag's
+commit.
 
 ## Development
 
@@ -32,7 +30,7 @@ cargo test --doc         # doc tests
 cargo clippy             # lint
 cargo fmt                # format
 cargo deny check         # advisories (root lockfile only), licenses, bans, sources (one ignore list: deny.toml)
-./scripts/check-advisories.sh  # advisories in every tracked Cargo.lock, the way CI gates them
+cargo run -q -- check     # advisories in every tracked Cargo.lock, the way CI gates them
 cargo vet                # supply chain review
 ```
 

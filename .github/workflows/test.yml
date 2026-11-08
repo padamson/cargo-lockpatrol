@@ -100,9 +100,6 @@ jobs:
       - name: Generate documentation
         run: cargo doc --no-deps --workspace
 
-      - name: Verify the advisory checker classifies cargo-deny output
-        run: scripts/test-check-advisories.sh
-
   test:
     name: Test on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
