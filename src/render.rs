@@ -10,9 +10,12 @@
 //! ```
 //! use cargo_lockpatrol::render::{render, Status};
 //!
-//! let report = "## cargo deny check advisories (Cargo.lock)\n\n\
-//!               error[unmaintained]: Bincode is unmaintained\n   \
-//!               ├ ID: RUSTSEC-2025-0141\n";
+//! let report = "\
+//! ## cargo deny check advisories (Cargo.lock)
+//!
+//! error[unmaintained]: Bincode is unmaintained
+//!    ├ ID: RUSTSEC-2025-0141
+//! ";
 //! let opened = render("", report);
 //! assert_eq!(opened.status, Status::Changed);
 //! assert_eq!(render(&opened.body, report).status, Status::Unchanged);
