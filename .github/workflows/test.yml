@@ -138,3 +138,196 @@ jobs:
       # pass is reported FLAKY instead of hiding, and a longer slow-timeout.
       - name: Run tests
         run: cargo nextest run --workspace --profile ci
+
+  # action.yml with a debug build and stub cargo and gh (tests/action). The
+  # download and attestation check need a real release, so they don't run.
+  action:
+    name: Action self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TITLE: "Security: new dependency advisory detected"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: action
+
+      - name: Build
+        run: cargo build
+
+      # From here on cargo and gh are the stubs.
+      - name: Put the stubs in place
+        run: |
+          echo "$GITHUB_WORKSPACE/tests/action/bin" >> "$GITHUB_PATH"
+          {
+            echo "CARGO=$GITHUB_WORKSPACE/tests/action/cargo"
+            echo "STUB_FIXTURES=$GITHUB_WORKSPACE/tests/fixtures/deny"
+            echo "FAKE_GH_DIR=$RUNNER_TEMP/gh"
+            echo "BIN=$GITHUB_WORKSPACE/target/debug/cargo-lockpatrol"
+          } >> "$GITHUB_ENV"
+          mkdir "$RUNNER_TEMP/gh"
+          echo '{}' > "$RUNNER_TEMP/gh/issue.json"
+
+      - name: "Gate: a clean check passes"
+        id: gate_clean
+        uses: ./
+        with:
+          binary: ${{ env.BIN }}
+        env:
+          STUB_ROOT: "clean:0"
+
+      - name: "Gate: a finding fails the step"
+        id: gate_finding
+        continue-on-error: true
+        uses: ./
+        with:
+          binary: ${{ env.BIN }}
+        env:
+          STUB_ROOT: "two-advisories:1"
+
+      - name: Check the gate
+        env:
+          CLEAN: ${{ steps.gate_clean.outputs.result }}
+          FINDING: ${{ steps.gate_finding.outcome }}/${{ steps.gate_finding.outputs.result }}
+        run: |
+          set -euo pipefail
+          [ "$CLEAN" = clean ] || { echo "::error::clean gate gave '$CLEAN'"; exit 1; }
+          [ "$FINDING" = failure/finding ] || { echo "::error::finding gate gave '$FINDING'"; exit 1; }
+          [ ! -e "$FAKE_GH_DIR/calls" ] || { echo "::error::the gate called gh:"; cat "$FAKE_GH_DIR/calls"; exit 1; }
+
+      - name: "Monitor: a first finding opens the issue"
+        uses: ./
+        with:
+          binary: ${{ env.BIN }}
+          issue: "true"
+        env:
+          STUB_ROOT: "two-advisories:1"
+
+      - name: Check that the issue was opened, and make it the open one
+        run: |
+          set -euo pipefail
+          cat "$FAKE_GH_DIR/calls"
+          grep -qx "issue create --title $TITLE --label security-advisory --body-file .*" "$FAKE_GH_DIR/calls"
+          grep -q 'RUSTSEC-2021-0003' "$FAKE_GH_DIR/created.md"
+          jq -n --rawfile body "$FAKE_GH_DIR/created.md" --arg title "$TITLE" \
+            '{number: 7, title: $title, body: $body}' > "$FAKE_GH_DIR/issue.json"
+          rm "$FAKE_GH_DIR/calls"
+
+      # The loop guard: the same findings write nothing.
+      - name: "Monitor: the same findings leave the issue alone"
+        uses: ./
+        with:
+          binary: ${{ env.BIN }}
+          issue: "true"
+        env:
+          STUB_ROOT: "two-advisories:1"
+
+      - name: Check that only the list call was made
+        run: |
+          set -euo pipefail
+          cat "$FAKE_GH_DIR/calls"
+          [ "$(grep -cv '^issue list ' "$FAKE_GH_DIR/calls")" = 0 ]
+          rm "$FAKE_GH_DIR/calls"
+
+      - name: "Monitor: a resolved finding edits the issue and comments"
+        uses: ./
+        with:
+          binary: ${{ env.BIN }}
+          issue: "true"
+        env:
+          STUB_ROOT: "unmaintained:1"
+
+      - name: Check the edit and the comment
+        run: |
+          set -euo pipefail
+          cat "$FAKE_GH_DIR/calls"
+          grep -qx 'issue edit 7 --body-file .*' "$FAKE_GH_DIR/calls"
+          grep -qx 'issue comment 7 --body-file .*' "$FAKE_GH_DIR/calls"
+          rm "$FAKE_GH_DIR/calls"
+
+      - name: "Monitor: a clean check closes the issue"
+        uses: ./
+        with:
+          binary: ${{ env.BIN }}
+          issue: "true"
+        env:
+          STUB_ROOT: "clean:0"
+
+      - name: Check the close
+        run: |
+          set -euo pipefail
+          cat "$FAKE_GH_DIR/calls"
+          grep -qx 'issue close 7 --comment .*' "$FAKE_GH_DIR/calls"
+          rm "$FAKE_GH_DIR/calls"
+
+      - name: "Monitor: a broken check fails and touches nothing"
+        id: monitor_broken
+        continue-on-error: true
+        uses: ./
+        with:
+          binary: ${{ env.BIN }}
+          issue: "true"
+        env:
+          STUB_ROOT: "config-error:1"
+
+      - name: Check the broken run
+        env:
+          BROKEN: ${{ steps.monitor_broken.outcome }}/${{ steps.monitor_broken.outputs.result }}
+        run: |
+          set -euo pipefail
+          [ "$BROKEN" = failure/broken ] || { echo "::error::broken monitor gave '$BROKEN'"; exit 1; }
+          [ ! -e "$FAKE_GH_DIR/calls" ] || { echo "::error::a broken check called gh:"; cat "$FAKE_GH_DIR/calls"; exit 1; }
+
+      # A finding beside a broken tree is a partial report, which never
+      # overwrites the open issue.
+      - name: Make a repository with two lockfiles
+        run: |
+          set -euo pipefail
+          two="$RUNNER_TEMP/two-trees"
+          mkdir -p "$two/nested"
+          touch "$two/Cargo.lock" "$two/nested/Cargo.lock"
+          git -C "$two" init -q
+          git -C "$two" add Cargo.lock nested/Cargo.lock
+          echo "TWO=$two" >> "$GITHUB_ENV"
+
+      - name: "Gate: a finding beside a broken tree fails the step"
+        id: gate_both
+        continue-on-error: true
+        uses: ./
+        with:
+          binary: ${{ env.BIN }}
+          working-directory: ${{ env.TWO }}
+        env:
+          STUB_ROOT: "two-advisories:1"
+          STUB_NESTED: "config-error:1"
+
+      - name: "Monitor: a partial report leaves the open issue alone and fails"
+        id: monitor_both
+        continue-on-error: true
+        uses: ./
+        with:
+          binary: ${{ env.BIN }}
+          working-directory: ${{ env.TWO }}
+          issue: "true"
+        env:
+          STUB_ROOT: "two-advisories:1"
+          STUB_NESTED: "config-error:1"
+
+      - name: Check the partial runs
+        env:
+          GATE: ${{ steps.gate_both.outcome }}/${{ steps.gate_both.outputs.result }}
+          MONITOR: ${{ steps.monitor_both.outcome }}/${{ steps.monitor_both.outputs.result }}
+        run: |
+          set -euo pipefail
+          [ "$GATE" = failure/both ] || { echo "::error::partial gate gave '$GATE'"; exit 1; }
+          [ "$MONITOR" = failure/both ] || { echo "::error::partial monitor gave '$MONITOR'"; exit 1; }
+          cat "$FAKE_GH_DIR/calls"
+          [ "$(grep -cv '^issue list ' "$FAKE_GH_DIR/calls")" = 0 ]

@@ -1,0 +1,233 @@
+name: cargo-lockpatrol
+description: >-
+  Check every tracked Cargo.lock for RustSec advisories with cargo-deny, as
+  a gate or as a monitor that keeps one tracking issue current.
+author: Paul Adamson
+branding:
+  icon: shield
+  color: red
+
+# Runs the release named in this Cargo.toml at the pinned commit, after
+# verifying its provenance. cargo-deny must already be on PATH.
+inputs:
+  deny-config:
+    description: The deny.toml every tree is checked against. Empty means `deny.toml` at the repository root.
+    default: ""
+  locked:
+    description: "Which trees must match their Cargo.lock: root, none or all."
+    default: root
+  issue:
+    description: >-
+      "false" (the gate): the step fails on a finding or a broken check.
+      "true" (the monitor): a finding opens or updates one tracking issue,
+      a clean check closes it, and the step fails only on a broken check.
+      The monitor needs `issues: write`.
+    default: "false"
+  issue-title:
+    description: The tracking issue's title. The monitor finds its issue by this title and the label.
+    default: "Security: new dependency advisory detected"
+  issue-label:
+    description: The tracking issue's label, created on the first finding if the repository lacks it.
+    default: security-advisory
+  github-token:
+    description: The token `gh` uses to download and verify the release and to manage the issue.
+    default: ${{ github.token }}
+  working-directory:
+    description: A directory inside the repository to check. The check always covers every lockfile the repository tracks.
+    default: "."
+  binary:
+    description: The absolute path of a cargo-lockpatrol binary to run instead of the release. For testing this action from its own repository.
+    default: ""
+
+outputs:
+  result:
+    description: "What the check came to: clean, finding, broken, or both (a finding and a broken tree)."
+    value: ${{ steps.check.outputs.result }}
+  report:
+    description: The path of the report the check wrote.
+    value: ${{ steps.check.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install cargo-lockpatrol
+      id: install
+      shell: bash
+      env:
+        BINARY: ${{ inputs.binary }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+        if [ -n "$BINARY" ]; then
+          echo "bin=$BINARY" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        repo=padamson/cargo-lockpatrol
+        # The version in the [package] table, and no other table's.
+        version=$(awk '/^\[/ { pkg = ($0 == "[package]") } pkg && /^version = "/ { split($0, v, "\""); print v[2]; exit }' "$GITHUB_ACTION_PATH/Cargo.toml")
+        if [ -z "$version" ]; then
+          echo "::error::no [package] version in the action's Cargo.toml"
+          exit 1
+        fi
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-X64)   target=x86_64-unknown-linux-musl;  ext=tar.gz ;;
+          Linux-ARM64) target=aarch64-unknown-linux-musl; ext=tar.gz ;;
+          macOS-X64)   target=x86_64-apple-darwin;        ext=tar.gz ;;
+          macOS-ARM64) target=aarch64-apple-darwin;       ext=tar.gz ;;
+          Windows-X64) target=x86_64-pc-windows-msvc;     ext=zip ;;
+          *) echo "::error::cargo-lockpatrol has no release for $RUNNER_OS $RUNNER_ARCH"; exit 1 ;;
+        esac
+        asset="cargo-lockpatrol-v$version-$target.$ext"
+        dir="$RUNNER_TEMP/cargo-lockpatrol-v$version-$target"
+        bin="$dir/cargo-lockpatrol"
+        if [ "$ext" = zip ]; then bin="$bin.exe"; fi
+        # Already downloaded and verified by an earlier use in this job.
+        if [ -x "$bin" ]; then
+          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        mkdir -p "$dir"
+        if ! gh release download "v$version" --repo "$repo" --pattern "$asset" --dir "$dir" --clobber; then
+          echo "::error::$repo has no release v$version with $asset; pin the action to the commit a release tag points to"
+          exit 1
+        fi
+        gh attestation verify "$dir/$asset" --repo "$repo" \
+          --signer-workflow "$repo/.github/workflows/release.yml" \
+          --source-ref "refs/tags/v$version"
+        if [ "$ext" = zip ]; then
+          7z x -y -o"$dir" "$dir/$asset" > /dev/null
+        else
+          tar -xzf "$dir/$asset" -C "$dir"
+        fi
+        echo "bin=$bin" >> "$GITHUB_OUTPUT"
+
+    # The gate exits with check's code; the monitor carries on past a finding.
+    - name: Check advisories
+      id: check
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BIN: ${{ steps.install.outputs.bin }}
+        CONFIG: ${{ inputs.deny-config }}
+        LOCKED: ${{ inputs.locked }}
+        ISSUE: ${{ inputs.issue }}
+      run: |
+        set -uo pipefail
+        case "$ISSUE" in
+          true | false) ;;
+          *) echo "::error::issue must be true or false, not '$ISSUE'"; exit 2 ;;
+        esac
+        args=(check --locked "$LOCKED")
+        if [ -n "$CONFIG" ]; then args+=(--config "$CONFIG"); fi
+        # One directory per use, so two uses in a job don't collide.
+        dir=$(mktemp -d "$RUNNER_TEMP/cargo-lockpatrol.XXXXXX")
+        echo "dir=$dir" >> "$GITHUB_OUTPUT"
+        report="$dir/report.txt"
+        code=0
+        "$BIN" "${args[@]}" > "$report" || code=$?
+        # Advisory text is community-authored: no line of it may run as a command.
+        token=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+        echo "::stop-commands::$token"
+        cat "$report"
+        echo "::$token::"
+        case "$code" in
+          0) result=clean ;;
+          1) result=finding ;;
+          3) result=both ;;
+          *) result=broken ;;
+        esac
+        echo "result=$result" >> "$GITHUB_OUTPUT"
+        echo "report=$report" >> "$GITHUB_OUTPUT"
+        if [ "$ISSUE" = false ]; then
+          exit "$code"
+        fi
+        if [ "$result" = broken ]; then
+          echo "::error::the advisory check broke without reporting an advisory; see the report above"
+          exit "$code"
+        fi
+
+    # The list endpoint, not `--search`: the search index lags and can miss
+    # the issue the last run opened.
+    - name: Find the tracking issue
+      id: find
+      if: inputs.issue == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        GH_REPO: ${{ github.repository }}
+        ISSUE_TITLE: ${{ inputs.issue-title }}
+        ISSUE_LABEL: ${{ inputs.issue-label }}
+        DIR: ${{ steps.check.outputs.dir }}
+      run: |
+        set -euo pipefail
+        gh issue list \
+          --state open \
+          --label "$ISSUE_LABEL" \
+          --json number,title,body \
+          --jq '[.[] | select(.title == env.ISSUE_TITLE)][0] // {}' \
+          > "$DIR/issue.json"
+        jq -j '.body // ""' "$DIR/issue.json" > "$DIR/old.md"
+        echo "number=$(jq -r '.number // ""' "$DIR/issue.json")" >> "$GITHUB_OUTPUT"
+
+    # A partial report (`both`) never overwrites an open issue: it lacks the
+    # broken trees' findings.
+    - name: Open or update the tracking issue
+      if: inputs.issue == 'true' && (steps.check.outputs.result == 'finding' || steps.check.outputs.result == 'both')
+      shell: bash
+      env:
+        BIN: ${{ steps.install.outputs.bin }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        GH_REPO: ${{ github.repository }}
+        ISSUE_TITLE: ${{ inputs.issue-title }}
+        ISSUE_LABEL: ${{ inputs.issue-label }}
+        DIR: ${{ steps.check.outputs.dir }}
+        EXISTING: ${{ steps.find.outputs.number }}
+        RESULT: ${{ steps.check.outputs.result }}
+        REPORT: ${{ steps.check.outputs.report }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -euo pipefail
+        if [ -n "$EXISTING" ] && [ "$RESULT" = both ]; then
+          echo "Partial report; leaving tracking issue #$EXISTING as it is"
+          exit 0
+        fi
+        body="$DIR/body.md"
+        comment="$DIR/comment.md"
+        status=$("$BIN" render "$DIR/old.md" "$REPORT" "$body" "$comment" --run-url "$RUN_URL")
+        if [ -z "$EXISTING" ]; then
+          echo "Opening the tracking issue"
+          gh label create "$ISSUE_LABEL" \
+            --description "Tracks newly published dependency advisories awaiting triage" \
+            --color B60205 2>/dev/null || true
+          gh issue create --title "$ISSUE_TITLE" --label "$ISSUE_LABEL" --body-file "$body"
+          exit 0
+        fi
+        if [ "$status" = unchanged ]; then
+          echo "Tracking issue #$EXISTING already carries this report"
+          exit 0
+        fi
+        echo "Updating tracking issue #$EXISTING ($status)"
+        gh issue edit "$EXISTING" --body-file "$body"
+        # Comment only when findings came or went.
+        if [ "$status" = changed ]; then
+          gh issue comment "$EXISTING" --body-file "$comment"
+        fi
+
+    - name: Close the tracking issue
+      if: inputs.issue == 'true' && steps.check.outputs.result == 'clean' && steps.find.outputs.number != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        GH_REPO: ${{ github.repository }}
+        EXISTING: ${{ steps.find.outputs.number }}
+      run: |
+        set -euo pipefail
+        echo "Advisories clean; closing tracking issue #$EXISTING"
+        gh issue close "$EXISTING" --comment "The advisory check is clean again. Closing automatically."
+
+    - name: Fail on a broken check
+      if: inputs.issue == 'true' && steps.check.outputs.result == 'both'
+      shell: bash
+      run: |
+        echo "::error::one lockfile's advisory check broke while another found something; see the Check advisories step"
+        exit 1

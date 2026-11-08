@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# cargo for the action self-test: plays back a cargo-deny fixture.
+# $STUB_ROOT and $STUB_NESTED are `fixture:exit` for the root and other trees.
+pick=${STUB_NESTED:-$STUB_ROOT}
+prev=
+for arg in "$@"; do
+  if [ "$prev" = --manifest-path ] && [ "$arg" = Cargo.toml ]; then pick=$STUB_ROOT; fi
+  prev=$arg
+done
+cat "$STUB_FIXTURES/${pick%%:*}.jsonl" >&2
+exit "${pick##*:}"

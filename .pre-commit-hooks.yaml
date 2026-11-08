@@ -1,0 +1,17 @@
+# Both need cargo-deny on PATH. `cargo-lockpatrol` builds the binary at the
+# pinned rev; `cargo-lockpatrol-system` runs one already on PATH.
+- id: cargo-lockpatrol
+  name: cargo lockpatrol check
+  description: Check every tracked Cargo.lock for RustSec advisories with cargo-deny
+  entry: cargo-lockpatrol check
+  language: rust
+  pass_filenames: false
+  files: (^|/)(Cargo\.toml|Cargo\.lock|deny\.toml)$
+
+- id: cargo-lockpatrol-system
+  name: cargo lockpatrol check
+  description: Check every tracked Cargo.lock for RustSec advisories with cargo-deny
+  entry: cargo-lockpatrol check
+  language: system
+  pass_filenames: false
+  files: (^|/)(Cargo\.toml|Cargo\.lock|deny\.toml)$

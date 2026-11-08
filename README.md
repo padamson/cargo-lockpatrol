@@ -51,6 +51,75 @@ cargo lockpatrol render OLD REPORT OUT COMMENT [--run-url URL]
                           # the issue: prints changed, refreshed or unchanged
 ```
 
+Every caller needs cargo-deny on `PATH`; cargo-lockpatrol does not install
+it, so you pick its version.
+
+### GitHub Action
+
+Pin the action by commit SHA. The action runs the release whose version is
+in `Cargo.toml` at that commit, and checks the archive's build provenance
+before running it, so the pin covers the binary too.
+
+As a gate, the step fails on a finding or a broken check:
+
+```yaml
+- uses: taiki-e/install-action@<sha>  # cargo-deny
+  with:
+    tool: cargo-deny
+- uses: padamson/cargo-lockpatrol@<sha>  # v0.1.0
+```
+
+As a monitor, a finding opens or updates one tracking issue, a clean check
+closes it, and the step fails only on a broken check:
+
+```yaml
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: advisory-monitor
+  cancel-in-progress: false
+
+jobs:
+  advisories:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@<sha>  # v7
+      - uses: taiki-e/install-action@<sha>  # cargo-deny
+        with:
+          tool: cargo-deny
+      - uses: padamson/cargo-lockpatrol@<sha>  # v0.1.0
+        with:
+          issue: "true"
+```
+
+Keep the monitor on a schedule, never on `issues` or `issue_comment`
+events, and keep the concurrency group: two runs at once would each find
+no issue and each open one. A run that finds what the issue already says
+does not touch it.
+
+Inputs: `deny-config` (default `deny.toml` at the root), `locked` (`root`,
+`none` or `all`), `working-directory` (where the repository is checked
+out, if not at the workspace root), `issue`, `issue-title`, `issue-label`
+and `github-token`.
+Outputs: `result` (`clean`, `finding`, `broken` or `both`) and `report`,
+the path of the report.
+
+### pre-commit and prek
+
+```yaml
+- repo: https://github.com/padamson/cargo-lockpatrol
+  rev: <sha>  # frozen: v0.1.0
+  hooks:
+    - id: cargo-lockpatrol         # builds the binary at the pinned rev
+    # - id: cargo-lockpatrol-system  # or runs one already on PATH
+```
+
 ## Agent skill
 
 [![skills.sh](https://skills.sh/b/padamson/cargo-lockpatrol)](https://skills.sh/padamson/cargo-lockpatrol)

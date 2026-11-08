@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# gh for the action self-test: logs calls to $FAKE_GH_DIR/calls, answers
+# `issue list` from issue.json, and keeps a created issue's body.
+set -euo pipefail
+printf '%s\n' "$*" >> "$FAKE_GH_DIR/calls"
+case "${1-} ${2-}" in
+  "issue list")
+    cat "$FAKE_GH_DIR/issue.json"
+    ;;
+  "issue create")
+    while [ $# -gt 0 ]; do
+      if [ "$1" = --body-file ]; then cp "$2" "$FAKE_GH_DIR/created.md"; fi
+      shift
+    done
+    ;;
+esac

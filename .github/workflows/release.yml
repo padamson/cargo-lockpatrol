@@ -80,20 +80,27 @@ jobs:
             esac
           done < "$RUNNER_TEMP/crates"
 
+  # Build jobs run third-party build scripts, so they only upload artifacts;
+  # the `release` job publishes them all at once (an immutable release takes
+  # no assets after it is published).
   build-release:
     name: Build ${{ matrix.target }}
     needs: [semver-checks]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     permissions:
-      contents: write       # create the GitHub Release and attach files
+      contents: read
       id-token: write       # provenance attestation
       attestations: write
     strategy:
       fail-fast: false
       matrix:
         include:
+          # musl: static, so it runs whatever the glibc.
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
           - os: macos-latest
             target: x86_64-apple-darwin
           - os: macos-latest
@@ -124,10 +131,10 @@ jobs:
         with:
           shared-key: release-${{ matrix.target }}
 
-      - name: Install cargo-nextest & parse-changelog
+      - name: Install cargo-nextest
         uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
-          tool: cargo-nextest,parse-changelog
+          tool: cargo-nextest
 
       - name: Run tests
         run: cargo nextest run --workspace --target ${{ matrix.target }}
@@ -146,6 +153,7 @@ jobs:
             strip "target/${{ matrix.target }}/release/$BINARY_NAME"
           fi
 
+      # A name `cargo binstall` tries by default; the action downloads it too.
       - name: Create archive (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -163,34 +171,58 @@ jobs:
             7z a "${BINARY_NAME}-v${{ steps.get_version.outputs.version }}-${{ matrix.target }}.zip" "target/${{ matrix.target }}/release/${BINARY_NAME}.exe"
           fi
 
-      - name: Generate release notes
-        shell: bash
-        run: parse-changelog CHANGELOG.md ${{ steps.get_version.outputs.version }} > release_notes.md
-
-      - name: Upload release asset
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
-        with:
-          files: |
-            *.tar.gz
-            *.zip
-          body_path: release_notes.md
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # A library crate produces no archive, and the action fails on an
-      # empty subject list. That is the only failure this tolerates; a
-      # binary crate whose attestation fails should look into it.
+      # The action verifies this before it runs the binary.
       - name: Generate SLSA provenance attestation
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-path: |
             *.tar.gz
             *.zip
-        continue-on-error: true
+
+      # A missing archive fails here: an immutable release cannot gain it later.
+      - name: Upload the archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: archive-${{ matrix.target }}
+          path: |
+            *.tar.gz
+            *.zip
+          if-no-files-found: error
+
+  release:
+    name: Create the GitHub Release
+    needs: [build-release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write       # create the GitHub Release and attach files
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install parse-changelog
+        uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
+        with:
+          tool: parse-changelog
+
+      - name: Generate release notes
+        run: parse-changelog CHANGELOG.md "${GITHUB_REF_NAME#v}" > release_notes.md
+
+      - name: Download the archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: archive-*
+          path: dist
+          merge-multiple: true
+
+      # Drafts, uploads, then publishes, as immutable releases need.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "$GITHUB_REF_NAME" --notes-file release_notes.md
 
   publish-crates:
     name: Publish to crates.io
-    needs: [build-release]
+    needs: [release]
     runs-on: ubuntu-latest
     # Only publishing needs to mint an OIDC token, and `id-token: write`
     # is what lets a job request one.

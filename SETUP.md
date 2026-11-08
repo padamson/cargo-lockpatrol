@@ -47,6 +47,7 @@ These settings cannot be configured via code and must be set in the GitHub UI.
   - `Test on ubuntu-latest`, `Test on macos-latest`, `Test on windows-latest`
   - `License & Dependency Check`, `Supply Chain Review`
   - `Mutation Testing (diff)`, `Skill version guard`
+  - `Action self-test` — runs `action.yml` from the checkout with stubbed cargo-deny and `gh`
 
   Leave `Semver preview` off the list. It is the early warning for the
   release's semver gate, and on 0.x a deliberate breaking change turns it
@@ -83,7 +84,8 @@ These settings cannot be configured via code and must be set in the GitHub UI.
         {"context": "License & Dependency Check"},
         {"context": "Supply Chain Review"},
         {"context": "Mutation Testing (diff)"},
-        {"context": "Skill version guard"}
+        {"context": "Skill version guard"},
+        {"context": "Action self-test"}
       ]
     },
     "enforce_admins": false,
@@ -96,6 +98,13 @@ These settings cannot be configured via code and must be set in the GitHub UI.
   }
   JSON
   ```
+
+- [ ] **Settings > General > Releases:** turn on "Enable release immutability"
+  before the first release. A published release's tag and assets then
+  cannot change, so the archive a pinned action downloads is the one the
+  release workflow built and attested. `release.yml` creates each release
+  with every archive at once, which immutability requires. Check it with
+  `gh api repos/OWNER/REPO/immutable-releases`: a pass is `"enabled":true`.
 
 - [x] **Settings > Rules > Rulesets > New tag ruleset:** restrict
   creation, update and deletion of release tags, with the Repository admin
