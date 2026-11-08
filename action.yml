@@ -11,7 +11,7 @@ branding:
 # verifying its provenance. cargo-deny must already be on PATH.
 inputs:
   deny-config:
-    description: The deny.toml every tree is checked against. Empty means `deny.toml` at the repository root.
+    description: The deny.toml every tree is checked against. Empty means `deny.toml` at the repository root. A path that is not a file is a broken check.
     default: ""
   locked:
     description: "Which trees must match their Cargo.lock: root, none or all."
@@ -123,11 +123,12 @@ runs:
         dir=$(mktemp -d "$RUNNER_TEMP/cargo-lockpatrol.XXXXXX")
         echo "dir=$dir" >> "$GITHUB_OUTPUT"
         report="$dir/report.txt"
-        code=0
-        "$BIN" "${args[@]}" > "$report" || code=$?
-        # Advisory text is community-authored: no line of it may run as a command.
+        # Advisory text, and the dependency errors cargo repeats on stderr,
+        # are not ours: no line of either stream may run as a command.
         token=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
         echo "::stop-commands::$token"
+        code=0
+        "$BIN" "${args[@]}" > "$report" || code=$?
         cat "$report"
         echo "::$token::"
         case "$code" in
@@ -147,7 +148,8 @@ runs:
         fi
 
     # The list endpoint, not `--search`: the search index lags and can miss
-    # the issue the last run opened.
+    # the issue the last run opened. `--limit`: gh fetches 30 by default,
+    # and this issue is the oldest under its label.
     - name: Find the tracking issue
       id: find
       if: inputs.issue == 'true'
@@ -163,6 +165,7 @@ runs:
         gh issue list \
           --state open \
           --label "$ISSUE_LABEL" \
+          --limit 1000 \
           --json number,title,body \
           --jq '[.[] | select(.title == env.ISSUE_TITLE)][0] // {}' \
           > "$DIR/issue.json"

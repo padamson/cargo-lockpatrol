@@ -9,7 +9,7 @@
 //! |---|---|
 //! | 0 | every tree clean |
 //! | 1 | an advisory in some tree |
-//! | 2 | a check broke without reporting one, or no `Cargo.lock` is tracked |
+//! | 2 | a check broke without reporting one, no `Cargo.lock` is tracked, or the `deny.toml` is missing |
 //! | 3 | both: one tree found an advisory and another broke |
 //!
 //! [`deny`] reads one cargo-deny run; [`check`] finds the trees and runs

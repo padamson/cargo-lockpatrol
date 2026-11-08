@@ -293,7 +293,7 @@ jobs:
           set -euo pipefail
           two="$RUNNER_TEMP/two-trees"
           mkdir -p "$two/nested"
-          touch "$two/Cargo.lock" "$two/nested/Cargo.lock"
+          touch "$two/deny.toml" "$two/Cargo.lock" "$two/nested/Cargo.lock"
           git -C "$two" init -q
           git -C "$two" add Cargo.lock nested/Cargo.lock
           echo "TWO=$two" >> "$GITHUB_ENV"

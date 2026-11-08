@@ -10,9 +10,9 @@ with `cargo-deny`, and keep one GitHub issue current with what it finds.
   with the root `deny.toml`.
 - Tells a finding from a broken run. `check` exits 0 when every tree is
   clean, 1 for a finding, 2 when the check itself broke (an
-  advisory-database fetch, a bad `deny.toml`, a `cargo metadata` failure),
-  and 3 for both, so a network error never reads as an advisory and a
-  broken tree cannot hide behind a clean one.
+  advisory-database fetch, a missing or bad `deny.toml`, a `cargo metadata`
+  failure), and 3 for both, so a network error never reads as an advisory
+  and a broken tree cannot hide behind a clean one.
 - Keeps one tracking issue. Each run rewrites the body, a comment is added
   only when the set of advisory ids changes (naming what came and what
   went), and the issue closes when every tree is clean. Triage goes in the
@@ -47,7 +47,9 @@ cargo lockpatrol render OLD REPORT OUT COMMENT [--run-url URL]
 ```
 
 Every caller needs cargo-deny on `PATH`; cargo-lockpatrol does not install
-it, so you pick its version.
+it, so you pick its version. Its tests pin the JSON cargo-deny 0.20.2
+writes; an older cargo-deny that writes something else turns every tree
+into a broken check, never a clean one.
 
 ### GitHub Action
 
@@ -58,6 +60,7 @@ before running it, so the pin covers the binary too.
 As a gate, the step fails on a finding or a broken check:
 
 ```yaml
+- uses: actions/checkout@<sha>  # v7
 - uses: taiki-e/install-action@<sha>  # cargo-deny
   with:
     tool: cargo-deny

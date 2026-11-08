@@ -3,7 +3,7 @@ name: cargo-lockpatrol
 description: Use when a repo checks RustSec advisories with cargo-deny through cargo-lockpatrol, or is replacing copied scripts/check-advisories.sh and advisory-monitor.yml with its GitHub Action and pre-commit hook; covers the check exit codes, pinning the action and hook by SHA, and the tracking issue.
 license: MIT OR Apache-2.0
 metadata:
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # cargo-lockpatrol
@@ -11,9 +11,10 @@ metadata:
 `cargo lockpatrol check` runs `cargo deny check advisories` on every
 `Cargo.lock` git tracks (the root and any nested tree, such as `fuzz/`),
 all against the root `deny.toml`, and exits 0 clean, 1 an advisory, 2 the
-check itself broke (an advisory-database fetch, a bad `deny.toml`, a lock
-that disagrees with its manifests), or 3 both. cargo-deny must be on
-`PATH`; cargo-lockpatrol never installs it.
+check itself broke (an advisory-database fetch, a missing or bad
+`deny.toml`, a lock that disagrees with its manifests), or 3 both.
+cargo-deny must be on `PATH`; cargo-lockpatrol never installs it, and a
+version older than the 0.20.2 its tests pin reads as broken, never as clean.
 
 It reaches a repo three ways, all released under one tag:
 

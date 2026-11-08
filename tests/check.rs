@@ -3,7 +3,8 @@
 // from cargo-deny 0.20.2 (tests/fixtures/deny). The repository tracks a
 // root and two nested lockfiles, one under a non-ASCII name; an untracked
 // one stands in for a stray build tree, and `oldCargo.lock` for a fixture
-// whose name only ends in Cargo.lock. No check should read either.
+// whose name only ends in Cargo.lock. No check should read either. A
+// `deny.toml` sits at the root and under `fuzz/`, where the configs point.
 //
 // The stub is a shell script, so these run on Unix only; the decisions
 // they wire together are unit-tested in src/ on every platform.
@@ -45,11 +46,13 @@ struct Repo {
 impl Repo {
     fn new() -> Self {
         let ws = Workspace::new();
-        for lock in TRACKED
-            .iter()
-            .chain(&["fuzz/oldCargo.lock", "scratch/Cargo.lock"])
-        {
-            ws.write(&format!("repo/{lock}"), "");
+        for file in TRACKED.iter().chain(&[
+            "fuzz/oldCargo.lock",
+            "scratch/Cargo.lock",
+            "deny.toml",
+            "fuzz/deny.toml",
+        ]) {
+            ws.write(&format!("repo/{file}"), "");
         }
         let stub = ws.write("bin/cargo", STUB);
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
@@ -332,6 +335,27 @@ fn a_relative_config_is_read_from_where_the_command_runs() {
     );
     let want = format!("{}/fuzz/deny.toml", repo.root.display());
     assert_eq!(run.values_of("--config"), [want.as_str(); 3], "{run:?}");
+}
+
+#[test]
+fn a_run_from_a_subdirectory_still_reads_the_root_deny_toml() {
+    let repo = Repo::new();
+    let run = repo.check_from(&repo.root.join("fuzz"), "clean:0", "clean:0", &[]);
+    let want = format!("{}/deny.toml", repo.root.display());
+    assert_eq!(run.values_of("--config"), [want.as_str(); 3], "{run:?}");
+}
+
+#[test]
+fn a_config_that_is_not_a_file_is_broken_before_any_tree_runs() {
+    // cargo deny would quietly check with its defaults.
+    let repo = Repo::new();
+    let run = repo.check_from(&repo.root, "clean:0", "clean:0", &["--config", "deny.tmol"]);
+    let names_it = run.stderr.contains("deny.tmol");
+    assert_eq!(
+        (run.code, run.calls.len(), names_it),
+        (Some(2), 0, true),
+        "{run:?}"
+    );
 }
 
 #[test]

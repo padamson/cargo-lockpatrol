@@ -12,7 +12,9 @@ both.
 
 - `--config`: the `deny.toml` every tree is checked against, relative to
   the current directory. Default: `deny.toml` at the repository root, even
-  for a nested tree that has its own.
+  for a nested tree that has its own. A path that is not a file is a
+  broken check (exit 2): cargo-deny would otherwise fall back to its
+  built-in config, with only a warning the check does not show.
 - `--locked`: which trees must match their `Cargo.lock`. `root` (the
   default) fails a root lock that disagrees with its manifests instead of
   checking a quietly rewritten graph; nested trees are exempt because one

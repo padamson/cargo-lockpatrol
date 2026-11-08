@@ -295,7 +295,9 @@ jobs:
         uses: ./.github/actions/diff-base
 
       - name: Run mutation testing on diff
-        run: ./scripts/mutants.sh ${{ steps.base.outputs.ref }}
+        env:
+          BASE: ${{ steps.base.outputs.ref }}
+        run: ./scripts/mutants.sh ${BASE:+"$BASE"}
 
       - name: Upload mutation report
         if: always()

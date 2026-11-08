@@ -10,9 +10,10 @@ env:
   RUST_BACKTRACE: 1
 
 # Job-scoped permissions: the default for every job is read-only, and
-# each job that writes names exactly what it writes. A build job running
-# third-party build scripts must not hold a token that can create a
-# release or mint attestations.
+# each job that writes names exactly what it writes. Build jobs attest
+# the archive they built, so they hold `id-token` and `attestations`
+# and never `contents: write`. The attestation proves the asset was not
+# swapped after the build, not that the build's inputs were clean.
 permissions:
   contents: read
 
@@ -111,11 +112,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Get version from tag
-        id: get_version
-        shell: bash
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
@@ -147,14 +143,15 @@ jobs:
         run: strip "target/${{ matrix.target }}/release/cargo-lockpatrol"
 
       # A name `cargo binstall` tries by default; the action downloads it too.
+      # The tag comes through the environment: a refname can hold shell syntax.
       - name: Create archive (Unix)
         if: runner.os != 'Windows'
-        run: tar czf "cargo-lockpatrol-v${{ steps.get_version.outputs.version }}-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" cargo-lockpatrol
+        run: tar czf "cargo-lockpatrol-$GITHUB_REF_NAME-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" cargo-lockpatrol
 
       - name: Create archive (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: 7z a "cargo-lockpatrol-v${{ steps.get_version.outputs.version }}-${{ matrix.target }}.zip" "target/${{ matrix.target }}/release/cargo-lockpatrol.exe"
+        run: 7z a "cargo-lockpatrol-$GITHUB_REF_NAME-${{ matrix.target }}.zip" "target/${{ matrix.target }}/release/cargo-lockpatrol.exe"
 
       # The action verifies this before it runs the binary.
       - name: Generate SLSA provenance attestation

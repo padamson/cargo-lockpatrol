@@ -176,7 +176,8 @@ fn exit_code(results: &[(PathBuf, TreeResult)]) -> u8 {
 pub struct Options {
     /// The repository's top level; every lockfile path is relative to it.
     pub root: PathBuf,
-    /// The `deny.toml` every tree is checked against.
+    /// The `deny.toml` every tree is checked against. It has to exist:
+    /// cargo deny warns about a missing one and uses its defaults.
     pub config: PathBuf,
     pub locked: Locked,
     /// The program run as `cargo`.
@@ -218,8 +219,17 @@ fn tracked_lockfiles(root: &Path) -> Result<Vec<PathBuf>, String> {
 
 /// Run the check over every tracked lockfile. The report of each tree
 /// that found something goes to `out`; why a tree broke goes to `err`.
-/// Returns the exit code.
+/// A config that is not a file is broken before any tree runs. Returns
+/// the exit code.
 pub fn run(opts: &Options, out: &mut impl Write, err: &mut impl Write) -> io::Result<u8> {
+    if !opts.config.is_file() {
+        writeln!(
+            err,
+            "no deny.toml at {}: cargo deny would check with its defaults instead",
+            opts.config.display()
+        )?;
+        return Ok(EXIT_BROKEN);
+    }
     let lockfiles = match tracked_lockfiles(&opts.root) {
         Ok(l) => l,
         Err(e) => {
