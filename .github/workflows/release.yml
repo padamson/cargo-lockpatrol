@@ -139,37 +139,22 @@ jobs:
       - name: Run tests
         run: cargo nextest run --workspace --target ${{ matrix.target }}
 
-      # A failed release build fails the release. Library crates build
-      # fine here too; the binary-only steps below check for a binary
-      # before doing anything.
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }} --verbose
 
       - name: Strip binary (Unix)
         if: runner.os != 'Windows'
-        run: |
-          BINARY_NAME=$(cargo metadata --no-deps --format-version 1 | python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; bins=[t['name'] for p in pkgs for t in p['targets'] if 'bin' in t['kind']]; print(bins[0] if bins else '')")
-          if [ -n "$BINARY_NAME" ] && [ -f "target/${{ matrix.target }}/release/$BINARY_NAME" ]; then
-            strip "target/${{ matrix.target }}/release/$BINARY_NAME"
-          fi
+        run: strip "target/${{ matrix.target }}/release/cargo-lockpatrol"
 
       # A name `cargo binstall` tries by default; the action downloads it too.
       - name: Create archive (Unix)
         if: runner.os != 'Windows'
-        run: |
-          BINARY_NAME=$(cargo metadata --no-deps --format-version 1 | python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; bins=[t['name'] for p in pkgs for t in p['targets'] if 'bin' in t['kind']]; print(bins[0] if bins else '')")
-          if [ -n "$BINARY_NAME" ] && [ -f "target/${{ matrix.target }}/release/$BINARY_NAME" ]; then
-            tar czf "$BINARY_NAME-v${{ steps.get_version.outputs.version }}-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" "$BINARY_NAME"
-          fi
+        run: tar czf "cargo-lockpatrol-v${{ steps.get_version.outputs.version }}-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" cargo-lockpatrol
 
       - name: Create archive (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: |
-          BINARY_NAME=$(cargo metadata --no-deps --format-version 1 | python3 -c "import sys,json; pkgs=json.load(sys.stdin)['packages']; bins=[t['name'] for p in pkgs for t in p['targets'] if 'bin' in t['kind']]; print(bins[0] if bins else '')")
-          if [ -n "$BINARY_NAME" ] && [ -f "target/${{ matrix.target }}/release/${BINARY_NAME}.exe" ]; then
-            7z a "${BINARY_NAME}-v${{ steps.get_version.outputs.version }}-${{ matrix.target }}.zip" "target/${{ matrix.target }}/release/${BINARY_NAME}.exe"
-          fi
+        run: 7z a "cargo-lockpatrol-v${{ steps.get_version.outputs.version }}-${{ matrix.target }}.zip" "target/${{ matrix.target }}/release/cargo-lockpatrol.exe"
 
       # The action verifies this before it runs the binary.
       - name: Generate SLSA provenance attestation
