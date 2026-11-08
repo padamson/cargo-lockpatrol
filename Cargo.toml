@@ -9,6 +9,7 @@ repository = "https://github.com/padamson/cargo-lockpatrol"
 authors = ["Paul Adamson"]
 categories = ["development-tools::cargo-plugins", "command-line-utilities"]
 keywords = ["cargo-deny", "rustsec", "advisory", "security", "lockfile"]
+include = ["/src", "/tests/*.rs", "/tests/common", "/tests/fixtures", "/README.md", "/CHANGELOG.md", "/LICENSE-*"]
 
 [lints.rust]
 # Nothing here has a reason to reach for unsafe. `deny` (not `forbid`)

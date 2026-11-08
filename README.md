@@ -3,9 +3,6 @@
 Check every tracked `Cargo.lock` in a repository for RustSec advisories
 with `cargo-deny`, and keep one GitHub issue current with what it finds.
 
-**Status:** in development. Nothing is released yet, and the commands
-below are the plan rather than a description of working code.
-
 ## What it does
 
 - Runs `cargo deny check advisories` against every `Cargo.lock` that git
@@ -37,10 +34,8 @@ repository. A released tool turns that into a Dependabot bump.
 
 ## Installation
 
-Once released:
-
 ```bash
-cargo install cargo-lockpatrol
+cargo install cargo-lockpatrol    # or: cargo binstall cargo-lockpatrol
 ```
 
 ## Usage
@@ -66,7 +61,7 @@ As a gate, the step fails on a finding or a broken check:
 - uses: taiki-e/install-action@<sha>  # cargo-deny
   with:
     tool: cargo-deny
-- uses: padamson/cargo-lockpatrol@<sha>  # v0.1.0
+- uses: padamson/cargo-lockpatrol@<sha>  # vX.Y.Z
 ```
 
 As a monitor, a finding opens or updates one tracking issue, a clean check
@@ -93,7 +88,7 @@ jobs:
       - uses: taiki-e/install-action@<sha>  # cargo-deny
         with:
           tool: cargo-deny
-      - uses: padamson/cargo-lockpatrol@<sha>  # v0.1.0
+      - uses: padamson/cargo-lockpatrol@<sha>  # vX.Y.Z
         with:
           issue: "true"
 ```
@@ -104,9 +99,9 @@ no issue and each open one. A run that finds what the issue already says
 does not touch it.
 
 Inputs: `deny-config` (default `deny.toml` at the root), `locked` (`root`,
-`none` or `all`), `working-directory` (where the repository is checked
-out, if not at the workspace root), `issue`, `issue-title`, `issue-label`
-and `github-token`.
+`none` or `all`), `working-directory` (a directory inside the repository
+to run from; `deny-config` is relative to it), `issue`, `issue-title`,
+`issue-label` and `github-token`.
 Outputs: `result` (`clean`, `finding`, `broken` or `both`) and `report`,
 the path of the report.
 
@@ -114,7 +109,7 @@ the path of the report.
 
 ```yaml
 - repo: https://github.com/padamson/cargo-lockpatrol
-  rev: <sha>  # frozen: v0.1.0
+  rev: <sha>  # frozen: vX.Y.Z
   hooks:
     - id: cargo-lockpatrol         # builds the binary at the pinned rev
     # - id: cargo-lockpatrol-system  # or runs one already on PATH
@@ -123,8 +118,6 @@ the path of the report.
 ## Agent skill
 
 [![skills.sh](https://skills.sh/b/padamson/cargo-lockpatrol)](https://skills.sh/padamson/cargo-lockpatrol)
-
-From the first release:
 
 ```bash
 npx skills add padamson/cargo-lockpatrol

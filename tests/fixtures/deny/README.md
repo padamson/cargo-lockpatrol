@@ -19,6 +19,7 @@ to `/home/runner/work/my-project/my-project`.
 | `unused-ignore.jsonl` | `smallvec` at 1.4.0 | `ignore` adds `RUSTSEC-2020-0001`, `unused-ignored-advisory = "deny"` | 1 |
 | `config-error.jsonl` | both | a misspelt key, `ignroe = []`, in a file named `bad.toml` | 1 |
 | `missing-manifest.jsonl` | none | `--manifest-path nope/Cargo.toml` | 1 |
+| `stale-lock.jsonl` | `smallvec = "=1.6.0"` added after the lock was generated | `version = 2`, run with `--locked` | 1 |
 
 `unmaintained.jsonl` and `vulnerability.jsonl` are the two diagnostics of
 `two-advisories.jsonl`, each with the summary's error count set to 1.

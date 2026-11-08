@@ -99,7 +99,7 @@ These settings cannot be configured via code and must be set in the GitHub UI.
   JSON
   ```
 
-- [ ] **Settings > General > Releases:** turn on "Enable release immutability"
+- [x] **Settings > General > Releases:** turn on "Enable release immutability"
   before the first release. A published release's tag and assets then
   cannot change, so the archive a pinned action downloads is the one the
   release workflow built and attested. `release.yml` creates each release
@@ -362,34 +362,11 @@ the audits, and run `cargo vet prune` once it merges.
 
 ## Agent skill
 
-`skills/my-project/` is the shape of the skill this crate would ship:
-the directory `npx skills add OWNER/REPO` installs into a consumer's
-repo, so an agent there knows how to use the crate. As scaffolded it is
-hidden from installers (`metadata.internal: true`) and nothing loads it.
-Decide now:
-
-- [ ] **Ship it.** Rename the directory to your crate name, remove the
-  `internal` line from `SKILL.md`, write it for an agent that has never
-  seen the crate, and fill `references/`. Every later content edit bumps
-  `metadata.version`; the pre-commit hook and the `Skill version guard`
-  CI job refuse one that doesn't. Keep the "Agent skill" block in
-  `README.md`.
-
-  Only if this repo uses its own crate (examples, an e2e suite, docs that
-  exercise it) is it worth auto-loading the skill in-repo too. Claude
-  Code discovers project skills at `.claude/skills/` alone, so add one
-  tracked symlink and un-ignore it:
-
-  ```bash
-  ln -s ../../skills/<name> .claude/skills/<name>
-  echo '!/.claude/skills/<name>' >> .gitignore
-  ```
-
-- [ ] **Don't ship one.** Delete `skills/`,
-  `scripts/check-skill-version-bumped.sh`, the `skill-version-bumped`
-  hook in `.pre-commit-config.yaml`, the `skill-version` job in
-  `test.yml`, and the "Agent skill" block in `README.md`, and drop
-  `Skill version guard` from the required checks.
+- [x] **Ship it.** `skills/cargo-lockpatrol/` is the skill this crate
+  ships: `npx skills add padamson/cargo-lockpatrol` installs it into a
+  consumer's repo, so an agent there knows how to use the crate. Every
+  content edit bumps `metadata.version`; the pre-commit hook and the
+  `Skill version guard` CI job refuse one that doesn't.
 
 Skills of the tools this crate depends on are the other direction, and
 CLAUDE.md covers them: `npx skills add <owner>/<repo>` once per clone,

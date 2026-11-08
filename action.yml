@@ -142,7 +142,7 @@ runs:
           exit "$code"
         fi
         if [ "$result" = broken ]; then
-          echo "::error::the advisory check broke without reporting an advisory; see the report above"
+          echo "::error::the advisory check broke without reporting an advisory; the reason is in the errors above"
           exit "$code"
         fi
 

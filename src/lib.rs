@@ -33,4 +33,5 @@ mod fixtures {
     pub const CONFIG_ERROR: &str = include_str!("../tests/fixtures/deny/config-error.jsonl");
     pub const MISSING_MANIFEST: &str =
         include_str!("../tests/fixtures/deny/missing-manifest.jsonl");
+    pub const STALE_LOCK: &str = include_str!("../tests/fixtures/deny/stale-lock.jsonl");
 }

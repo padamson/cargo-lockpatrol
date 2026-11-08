@@ -418,6 +418,21 @@ mod tests {
     }
 
     #[test]
+    fn a_stale_lock_under_locked_is_broken_and_says_why() {
+        let b = broken(classify(Some(1), STALE_LOCK));
+        let says_locked = b
+            .messages
+            .iter()
+            .any(|m| m.contains("because --locked was passed"));
+        assert_eq!(
+            (b.kind, says_locked),
+            (BrokenKind::NoSummary, true),
+            "got {:?}",
+            b.messages
+        );
+    }
+
+    #[test]
     fn a_bad_manifest_path_is_broken_without_a_summary() {
         let b = broken(classify(Some(1), MISSING_MANIFEST));
         assert_eq!(b.kind, BrokenKind::NoSummary);

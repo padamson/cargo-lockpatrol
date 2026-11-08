@@ -15,14 +15,13 @@ One tag releases three things that share one checker:
   for the runner, verifies it, and drives the issue with `gh`;
 - `.pre-commit-hooks.yaml`, for prek and pre-commit.
 
-None of the three has a release yet. Until the first release, this repo's own
-advisory gate is the copy it got from the template: `scripts/check-advisories.sh`,
-`scripts/advisory-issue-body.py`, `scripts/test-check-advisories.sh`,
-`advisory-monitor.yml` and the two advisory hooks. Port every case in
-`test-check-advisories.sh` to a Rust test before deleting anything. After
-the release, switch this repo to its own action and hook at a pinned
-release (not a path into the working tree, so it tests what consumers
-get), then delete the copies.
+This repo's own advisory gate is still the copy it got from the template:
+`scripts/check-advisories.sh`, `scripts/advisory-issue-body.py`,
+`scripts/test-check-advisories.sh`, `advisory-monitor.yml` and the two
+advisory hooks. Every case in `test-check-advisories.sh` has a Rust test.
+Once v0.1.0 is tagged, switch this repo to its own action and hook at the
+pinned release (not a path into the working tree, so it tests what
+consumers get), then delete the copies.
 
 ## Development
 
@@ -103,11 +102,9 @@ updates, and the crate's Trusted Publisher (SETUP.md has each).
 
 ## Agent skills
 
-`skills/cargo-lockpatrol/` is the skill this crate ships to consumers. It
-stays hidden (`metadata.internal: true`) until the first release, which
-removes that line. Edits to it must bump
-`metadata.version` in its `SKILL.md`; the pre-commit hook and the
-`Skill version guard` CI job both enforce that.
+`skills/cargo-lockpatrol/` is the skill this crate ships to consumers.
+Edits to it must bump `metadata.version` in its `SKILL.md`; the
+pre-commit hook and the `Skill version guard` CI job both enforce that.
 
 Skills of tools this crate depends on are managed installs, not vendored:
 `skills-lock.json` (tracked) records each source and a content hash, and

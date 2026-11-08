@@ -21,8 +21,6 @@ Thumbs.db
 # crate depends on). The pin lives in skills-lock.json, which is tracked;
 # the content is fetched, so it is not vendored here. The Claude Code entry
 # points are symlinks into .agents/, and a tracked symlink would dangle in
-# any clone that has not run the install. A crate that uses its own shipped
-# skill in-repo adds `!/.claude/skills/<name>` here and tracks that one
-# symlink, whose target lives under skills/ (see SETUP.md).
+# any clone that has not run the install.
 /.agents/
 /.claude/skills/
