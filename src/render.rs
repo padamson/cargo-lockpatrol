@@ -390,8 +390,8 @@ mod tests {
         render("", report).body
     }
 
-    const SCRIPT_REPORT: &str = include_str!("../tests/fixtures/render/script-report.txt");
-    const SCRIPT_BODY: &str = include_str!("../tests/fixtures/render/script-body.md");
+    const TEMPLATE_REPORT: &str = include_str!("../tests/fixtures/render/template-report.txt");
+    const TEMPLATE_BODY: &str = include_str!("../tests/fixtures/render/template-body.md");
 
     /// `n` findings of one advisory, each under its own lockfile, as a
     /// comment listing takes them.
@@ -452,22 +452,22 @@ mod tests {
     }
 
     #[test]
-    fn the_shell_scripts_report_reads_as_the_findings_check_reports() {
+    fn the_template_monitors_report_reads_as_the_findings_check_reports() {
         assert_eq!(
-            keys_of(SCRIPT_REPORT),
+            keys_of(TEMPLATE_REPORT),
             keys_of(&report(&[("Cargo.lock", TWO)]))
         );
     }
 
     #[test]
-    fn the_report_in_a_body_the_shell_script_wrote_reads_as_its_findings() {
-        let written = written_report(SCRIPT_BODY).expect("the body holds a fenced report");
-        assert_eq!(keys_of(&written), keys_of(SCRIPT_REPORT));
+    fn the_report_in_a_template_issue_body_reads_as_its_findings() {
+        let written = written_report(TEMPLATE_BODY).expect("the body holds a fenced report");
+        assert_eq!(keys_of(&written), keys_of(TEMPLATE_REPORT));
     }
 
     #[test]
-    fn a_body_the_shell_script_wrote_refreshes_on_the_same_findings() {
-        let rendered = render(SCRIPT_BODY, &report(&[("Cargo.lock", TWO)]));
+    fn a_template_issue_body_refreshes_on_the_same_findings() {
+        let rendered = render(TEMPLATE_BODY, &report(&[("Cargo.lock", TWO)]));
         assert_eq!(rendered.status, Status::Refreshed, "{rendered:?}");
     }
 

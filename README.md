@@ -47,6 +47,8 @@ cargo install cargo-lockpatrol
 
 ```bash
 cargo lockpatrol check    # the gate: exit 0, 1, 2 or 3 as above
+cargo lockpatrol render OLD REPORT OUT COMMENT [--run-url URL]
+                          # the issue: prints changed, refreshed or unchanged
 ```
 
 ## Agent skill
