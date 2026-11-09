@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-09
+
 ### Fixed
 - An issue body from the template's older scripts, which kept the report between `<!-- advisory-report -->` markers, is read from between the markers, so a code block in a triage note above them no longer reads as the report and announces every finding as new
 - Triage notes kept beside the report in such a body move into a comment on the first run instead of being dropped with the old body
@@ -21,5 +23,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - An agent skill: `npx skills add padamson/cargo-lockpatrol`
 - Release archives for Linux (x86_64, aarch64; static, so any glibc), macOS (x86_64, aarch64) and Windows (x86_64), with build provenance, named so `cargo binstall` finds them
 
-[Unreleased]: https://github.com/padamson/cargo-lockpatrol/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/padamson/cargo-lockpatrol/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/padamson/cargo-lockpatrol/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/padamson/cargo-lockpatrol/releases/tag/v0.1.0
