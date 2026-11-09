@@ -245,11 +245,18 @@ fn fenced(text: &str) -> String {
     format!("{fence}\n{text}\n{fence}")
 }
 
+/// Whether `report` needs more than `room` characters, so [`section`]
+/// cuts it.
+fn too_long(report: &str, room: usize) -> bool {
+    report.trim_end_matches('\n').chars().count() > room
+}
+
 /// The fenced report in at most `room` characters. Past that, only the
 /// findings are kept, so each one can still be matched next run.
 fn section(report: &str, room: usize) -> String {
+    let cut = too_long(report, room);
     let report = report.trim_end_matches('\n');
-    if report.chars().count() <= room {
+    if !cut {
         return fenced(report);
     }
     let items = compact(report);
@@ -259,6 +266,55 @@ fn section(report: &str, room: usize) -> String {
         .collect();
     kept.extend(["", CUT]);
     fenced(&kept.join("\n"))
+}
+
+/// The first line of the list of every finding's key that a cut body
+/// carries, in an HTML comment the issue page does not show.
+const KEYS: &str = "<!-- cargo-lockpatrol findings";
+
+/// `field` with `%`, and the tab and `>` that could end its column or the
+/// comment around it, percent-encoded.
+fn escape(field: &str) -> String {
+    field
+        .replace('%', "%25")
+        .replace('\t', "%09")
+        .replace('>', "%3E")
+}
+
+/// The field [`escape`] encoded. Every `%` in its input starts a code, so
+/// decoding `%25` last cannot make a code that was not there.
+fn unescape(field: &str) -> String {
+    field
+        .replace("%3E", ">")
+        .replace("%09", "\t")
+        .replace("%25", "%")
+}
+
+/// The list of `keys`, one `tree<TAB>id` line each, after the blank line
+/// that separates it from the report.
+fn key_list<'a>(keys: impl Iterator<Item = &'a Key>) -> String {
+    let lines = keys.map(|k| {
+        let tree = k.tree.as_deref().unwrap_or_default();
+        format!("{}\t{}", escape(tree), escape(&k.id))
+    });
+    let mut list = vec![String::new(), String::new(), KEYS.to_owned()];
+    list.extend(lines);
+    list.push("-->".to_owned());
+    list.join("\n")
+}
+
+/// The keys in `body`'s key list, or `None` when it has none.
+fn listed_keys(body: &str) -> Option<Vec<Key>> {
+    let mut lines = body.split('\n').skip_while(|l| *l != KEYS);
+    lines.next()?;
+    let keys = lines.take_while(|l| *l != "-->").filter_map(|l| {
+        let (tree, id) = l.split_once('\t')?;
+        Some(Key {
+            tree: (!tree.is_empty()).then(|| unescape(tree)),
+            id: unescape(id),
+        })
+    });
+    Some(keys.collect())
 }
 
 fn by_id(found: BTreeMap<Key, String>) -> BTreeMap<Key, String> {
@@ -294,15 +350,36 @@ pub fn render(old: &str, report: &str) -> Rendered {
     let (old, report) = (lf(old), lf(report));
     let report = report.as_str();
     let room = LIMIT - INTRO.chars().count() - FOOTER.chars().count();
-    let report_section = section(report, room);
-    let body = format!("{INTRO}{report_section}{FOOTER}");
+    let live = findings(report);
+    // A cut body also lists every finding's key, so the next run can tell
+    // a new finding from one the cut kept out of view, while the list takes
+    // no more than half the room. Past that, the body is cut without one.
+    let list = too_long(report, room)
+        .then(|| key_list(live.iter().map(|(key, _)| key)))
+        .filter(|list| list.chars().count() <= room / 2)
+        .unwrap_or_default();
+    let report_section = section(report, room - list.chars().count());
+    let body = format!("{INTRO}{report_section}{list}{FOOTER}");
     // Text outside the old report's fence, such as a note someone added,
     // is not read for findings. A body with no fence has none.
-    let mut was: BTreeMap<_, _> = findings(&written_report(&old).unwrap_or_default())
-        .into_iter()
-        .collect();
+    let old_text = written_report(&old).unwrap_or_default();
+    let old_report: BTreeMap<_, _> = findings(&old_text).into_iter().collect();
+    let listed = listed_keys(&old);
+    let old_whole = listed.is_some() || !old_text.split('\n').any(|l| l == CUT);
+    // A finding past the old body's cut shows its id where a headline
+    // would go.
+    let mut was: BTreeMap<_, _> = match listed {
+        Some(keys) => keys
+            .into_iter()
+            .map(|key| {
+                let headline = old_report.get(&key).unwrap_or(&key.id).clone();
+                (key, headline)
+            })
+            .collect(),
+        None => old_report,
+    };
     let mut shown: BTreeMap<_, _> = findings(&report_section).into_iter().collect();
-    let mut live: BTreeMap<_, _> = findings(report).into_iter().collect();
+    let mut live: BTreeMap<_, _> = live.into_iter().collect();
     // A body written before reports had lockfile headings has no lockfile
     // in its keys. Compare it by id alone, or the first run after it posts
     // a comment listing every finding as both new and resolved.
@@ -311,10 +388,13 @@ pub fn render(old: &str, report: &str) -> Rendered {
         live = by_id(live);
     }
     // A finding is resolved only when it is gone from the full report, not
-    // when the size cut left it out of the body. A finding is new when the
-    // body shows it and the old body did not; one left out by the cut is
-    // not counted, since nothing says whether the old body had it.
-    let new: BTreeMap<_, _> = shown
+    // when the size cut left it out of the body. Against an old body that
+    // knew every finding, uncut or listing its keys, a finding is new when
+    // it is live and the old body lacked it. Against one cut without a
+    // list, it is new only when the new body shows it, since nothing says
+    // whether the old body had one it cut.
+    let candidates = if old_whole { live.clone() } else { shown };
+    let new: BTreeMap<_, _> = candidates
         .into_iter()
         .filter(|(key, _)| !was.contains_key(key))
         .collect();
@@ -562,7 +642,12 @@ mod tests {
 
     /// `n` trees with one finding each, under crates/c1/Cargo.lock onward.
     fn many(n: usize) -> String {
-        let lockfiles: Vec<String> = (1..=n).map(|i| format!("crates/c{i}/Cargo.lock")).collect();
+        many_in(1..=n)
+    }
+
+    /// A tree with one finding under crates/c{i}/Cargo.lock for each `i`.
+    fn many_in(range: std::ops::RangeInclusive<usize>) -> String {
+        let lockfiles: Vec<String> = range.map(|i| format!("crates/c{i}/Cargo.lock")).collect();
         let trees: Vec<_> = lockfiles
             .iter()
             .map(|l| (l.as_str(), UNMAINTAINED))
@@ -1016,15 +1101,10 @@ mod tests {
     }
 
     #[test]
-    fn an_oversized_report_keeps_every_finding_under_its_lockfile() {
+    fn an_oversized_report_lists_every_finding_under_its_lockfile() {
         let huge = many(400);
-        let body = opened(&huge);
-        assert_eq!(
-            (body.contains(CUT), keys_of(&body)),
-            (true, keys_of(&huge)),
-            "{} characters",
-            huge.len()
-        );
+        let listed = listed_keys(&opened(&huge)).expect("a cut body carries a key list");
+        assert_eq!(listed.into_iter().collect::<BTreeSet<_>>(), keys_of(&huge));
     }
 
     #[test]
@@ -1100,6 +1180,105 @@ mod tests {
                 key("crates/c0/Cargo.lock", UNMAINTAINED_ID)
             ]
         );
+    }
+
+    // 600 findings outgrow the body, so it is cut, but their keys still fit
+    // beside the shortened report.
+    #[test]
+    fn a_finding_a_resolution_brings_into_view_past_a_cut_is_not_new() {
+        let rendered = render(&opened(&many(600)), &many_in(2..=600));
+        assert_eq!(
+            (keys(&rendered.new), keys(&rendered.resolved)),
+            (vec![], vec![key("crates/c1/Cargo.lock", UNMAINTAINED_ID)])
+        );
+    }
+
+    #[test]
+    fn a_new_finding_past_a_cut_is_new() {
+        let rendered = render(&opened(&many(600)), &many_in(1..=601));
+        assert_eq!(
+            keys(&rendered.new),
+            vec![key("crates/c601/Cargo.lock", UNMAINTAINED_ID)]
+        );
+    }
+
+    #[test]
+    fn a_new_finding_past_the_first_cut_is_new() {
+        let rendered = render(&opened(&many(30)), &many(600));
+        let past_the_old: BTreeSet<Key> = (31..=600)
+            .map(|i| key(&format!("crates/c{i}/Cargo.lock"), UNMAINTAINED_ID))
+            .collect();
+        assert_eq!(
+            keys(&rendered.new),
+            past_the_old.into_iter().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_finding_resolved_in_view_of_a_listed_body_keeps_its_headline() {
+        let rendered = render(&opened(&many(600)), &many_in(2..=600));
+        let one = report(&[("crates/c1/Cargo.lock", UNMAINTAINED)]);
+        let headline = findings(&one).pop().expect("the fixture has a finding").1;
+        assert_eq!(
+            rendered.resolved,
+            BTreeMap::from([(key("crates/c1/Cargo.lock", UNMAINTAINED_ID), headline)])
+        );
+    }
+
+    #[test]
+    fn a_finding_resolved_past_a_cut_is_named_by_its_id() {
+        let rendered = render(&opened(&many(600)), &many_in(1..=599));
+        assert_eq!(
+            rendered.resolved,
+            BTreeMap::from([(
+                key("crates/c600/Cargo.lock", UNMAINTAINED_ID),
+                UNMAINTAINED_ID.to_owned()
+            )])
+        );
+    }
+
+    // Beside the list, the cut still shows findings up to the budget: no
+    // finding it left out (one item, a heading and a finding, is under 200
+    // characters) would have fit.
+    #[test]
+    fn a_cut_body_with_a_key_list_fills_its_budget_and_no_more() {
+        let body = opened(&many(600));
+        assert!(body.contains(KEYS), "the fixture must carry a list");
+        let size = body.chars().count();
+        assert!(LIMIT - 200 < size && size <= LIMIT + 8, "{size} characters");
+    }
+
+    fn awkward_keys() -> Vec<Key> {
+        vec![
+            key("a\tb/Cargo.lock", "error[yanked]: x --> 100% %3E y"),
+            Key {
+                tree: None,
+                id: UNMAINTAINED_ID.into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn a_report_that_just_fits_the_body_carries_no_key_list() {
+        let room = LIMIT - INTRO.chars().count() - FOOTER.chars().count();
+        let r = report(&[("Cargo.lock", UNMAINTAINED)]);
+        let r = r.trim_end();
+        let padded = format!("{r}\n{}", "x".repeat(room - r.chars().count() - 1));
+        assert!(!opened(&padded).contains(KEYS));
+    }
+
+    #[test]
+    fn a_key_list_reads_back_as_its_keys_whatever_they_hold() {
+        let keys = awkward_keys();
+        assert_eq!(listed_keys(&key_list(keys.iter())), Some(keys));
+    }
+
+    // GitHub ends an HTML comment at the first `-->`, so one inside a key
+    // would show the rest of the list on the issue page.
+    #[test]
+    fn a_key_list_closes_its_comment_only_at_its_end() {
+        let list = key_list(awkward_keys().iter());
+        assert_eq!(list.matches("-->").count(), 1, "{list}");
     }
 
     #[test]
