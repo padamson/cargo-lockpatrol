@@ -246,8 +246,9 @@ jobs:
         run: |
           set -euo pipefail
           cat "$FAKE_GH_DIR/calls"
-          grep -qx 'issue edit 7 --body-file .*' "$FAKE_GH_DIR/calls"
-          grep -qx 'issue comment 7 --body-file .*' "$FAKE_GH_DIR/calls"
+          # The comment before the edit, so a failed comment leaves the old body.
+          calls=$(grep -oE '^issue (comment|edit) 7 --body-file' "$FAKE_GH_DIR/calls" | cut -d' ' -f2 | paste -sd' ' -)
+          [ "$calls" = "comment edit" ] || { echo "::error::expected a comment, then an edit; got '$calls'"; exit 1; }
           rm "$FAKE_GH_DIR/calls"
 
       - name: "Monitor: a clean check closes the issue"

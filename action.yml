@@ -210,11 +210,13 @@ runs:
           exit 0
         fi
         echo "Updating tracking issue #$EXISTING ($status)"
-        gh issue edit "$EXISTING" --body-file "$body"
-        # Comment only when findings came or went.
+        # Comment only when findings came or went, or notes leave the body.
+        # The comment goes first: once the body is edited the next run sees
+        # nothing to say, while a failed edit only repeats the comment.
         if [ "$status" = changed ]; then
           gh issue comment "$EXISTING" --body-file "$comment"
         fi
+        gh issue edit "$EXISTING" --body-file "$body"
 
     - name: Close the tracking issue
       if: inputs.issue == 'true' && steps.check.outputs.result == 'clean' && steps.find.outputs.number != ''
