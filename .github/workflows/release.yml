@@ -133,10 +133,10 @@ jobs:
           tool: cargo-nextest
 
       - name: Run tests
-        run: cargo nextest run --workspace --target ${{ matrix.target }}
+        run: cargo nextest run --locked --workspace --target ${{ matrix.target }}
 
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }} --verbose
+        run: cargo build --locked --release --target ${{ matrix.target }} --verbose
 
       - name: Strip binary (Unix)
         if: runner.os != 'Windows'

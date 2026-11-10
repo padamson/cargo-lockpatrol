@@ -67,6 +67,12 @@ As a gate, the step fails on a finding or a broken check:
 - uses: padamson/cargo-lockpatrol@<sha>  # vX.Y.Z
 ```
 
+Any cargo step ahead of the action in the same job has to run with
+`--locked`, as in `cargo deny --workspace --locked check bans licenses
+sources` (the flag goes before `check`) or `cargo build --locked`.
+Without it cargo rewrites a stale `Cargo.lock` in the checkout, and the
+action checks the rewritten lock instead of the committed one.
+
 As a monitor, a finding opens or updates one tracking issue, a clean check
 closes it, and the step fails only on a broken check:
 

@@ -41,8 +41,11 @@ jobs:
         with:
           tool: cargo-deny,cargo-nextest
 
+      # --locked: without it this step re-resolves a stale Cargo.lock in
+      # the checkout, and the advisory step below then reads the rewritten
+      # lock instead of the committed one.
       - name: Run cargo deny
-        run: cargo deny --workspace check bans licenses sources
+        run: cargo deny --workspace --locked check bans licenses sources
 
       - name: Check advisories in every lockfile
         uses: padamson/cargo-lockpatrol@40075b2231e33e8f0a6d08f39acd0691e1f3efba # v0.1.1

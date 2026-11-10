@@ -3,7 +3,7 @@ name: cargo-lockpatrol
 description: Use when a repo checks RustSec advisories with cargo-deny through cargo-lockpatrol, or is replacing copied scripts/check-advisories.sh and advisory-monitor.yml with its GitHub Action and pre-commit hook; covers the check exit codes, pinning the action and hook by SHA, and the tracking issue.
 license: MIT OR Apache-2.0
 metadata:
-  version: "1.0.2"
+  version: "1.0.3"
 ---
 
 # cargo-lockpatrol
@@ -34,6 +34,11 @@ It reaches a repo three ways, all released under one tag:
   that commit. A commit between releases names the previous release, so
   its `action.yml` can pass that older binary a flag it does not know, and
   the check reports broken.
+- **Run every cargo step ahead of the action in its job with `--locked`**,
+  as in `cargo deny --workspace --locked check bans licenses sources` (the
+  flag goes before `check`) or `cargo build --locked`. Without it cargo
+  rewrites a stale `Cargo.lock` in the checkout, and the action checks the
+  rewritten lock, so `locked: root` never fails.
 - **Run the monitor on `schedule` and `workflow_dispatch` only**, with a
   `concurrency` group and `cancel-in-progress: false`. Never trigger it
   from `issues` or `issue_comment`: every issue event would run a full
