@@ -71,12 +71,12 @@ what a pass looks like; CI is the backstop, not the plan.
 ruleset, the `release` environment and its tag policy, Allow auto-merge
 and automatic head-branch deletion, the merge App and its two Dependabot
 secrets, Dependabot alerts and security updates, and the crate's Trusted
-Publisher (SETUP.md has each).
+Publisher.
 
 **By eye:**
 
-- Prose a reader will act on: the CHANGELOG entry, README, SETUP.md
-  steps, and the shipped skill under `skills/`. The skill version guard
+- Prose a reader will act on: the CHANGELOG entry, README, and the
+  shipped skill under `skills/`. The skill version guard
   checks the bump, not that the prose is still true.
 - A workflow change: the first run of the changed job on GitHub, since
   nothing local runs it. A job that only fires on a tag, a schedule or a
@@ -165,9 +165,9 @@ crates.io release, then builds, tests, creates a GitHub Release, and
 publishes to crates.io. A crate not yet on crates.io skips the semver
 check, and a version already there skips the publish; any other answer
 from crates.io fails the run, and so does a tag that no publishable
-crate's version matches. A crate's first version is published by hand
-(SETUP.md, "crates.io Trusted Publishing"); its tag then finds that
-version on crates.io and skips the publish.
+crate's version matches. A crate's first version is published by hand,
+since crates.io adds a trusted publisher only to a crate that exists;
+its tag then finds that version on crates.io and skips the publish.
 
 After a crate's first publish (the first release, or a crate new to the
 workspace), add `[policy.<crate>] audit-as-crates-io = false` to

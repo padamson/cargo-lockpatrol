@@ -92,7 +92,7 @@ repos:
         pass_filenames: false
         files: (Cargo\.toml|Cargo\.lock|deny\.toml)$
 
-      # Skips until `cargo vet init` has run (see SETUP.md), mirroring
+      # Skips until `cargo vet init` has run, mirroring
       # the guard on the CI job, so the first commit of a new repo isn't
       # blocked on supply-chain setup. The `files` regex must match paths
       # *under* `supply-chain/`; an end-anchored `supply-chain/$` matches

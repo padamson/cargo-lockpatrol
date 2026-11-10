@@ -229,7 +229,7 @@ jobs:
       # minutes, instead of holding a long-lived CARGO_REGISTRY_TOKEN that
       # works from anywhere and never expires. The action's post step revokes
       # it when the job ends. Configure the trusted publisher on
-      # crates.io first (SETUP.md); with none configured this step fails,
+      # crates.io first; with none configured this step fails,
       # which is correct. There is deliberately no "skip if not
       # configured" guard and no `continue-on-error` on the publish: both
       # turn a broken release into a green run with no crate.
@@ -237,7 +237,7 @@ jobs:
         id: auth
         uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1
 
-      # SETUP.md has the first version published by hand, since a trusted
+      # The first version is published by hand, since a trusted
       # publisher can only be added to a crate that exists, so the first
       # tag finds its version already there. That case and a rerun are
       # skipped with a line saying so, but only on a 200; a 404 publishes
@@ -245,8 +245,7 @@ jobs:
       # is what keeps a forgotten version bump from landing here as a skip. Each crate is checked at its
       # own version. A workspace whose crates depend on each other must
       # publish them in dependency order, which `cargo metadata` does not
-      # guarantee: list them by hand here (SETUP.md, "Converting to a
-      # workspace").
+      # guarantee: list them by hand here.
       - name: Publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

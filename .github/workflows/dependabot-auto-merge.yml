@@ -5,7 +5,7 @@ name: Dependabot auto-merge
 # merges once the required status checks pass. Applies to all update types
 # (major, minor, patch); the status checks are the gate, so a bump that
 # breaks the build simply won't merge. Every job that should block a bump
-# must be a required status check (SETUP.md lists them).
+# must be a required status check.
 #
 # Auto-merge is enabled with a GitHub App token, not GITHUB_TOKEN. A merge
 # made with GITHUB_TOKEN triggers no workflows, so main would get no push
@@ -20,7 +20,6 @@ name: Dependabot auto-merge
 # files. Its Client ID and private key are Dependabot secrets, the only
 # secrets a Dependabot-triggered run can read. It must not be allowed to
 # bypass branch protection, or its merges would skip the required checks.
-# SETUP.md walks through creating it.
 #
 # The one exception is a PR that edits this file, which is merged by hand.
 # A pull_request run takes the workflow and its action pins from the PR's

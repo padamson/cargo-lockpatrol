@@ -132,7 +132,7 @@ jobs:
       # plus one skip: a crate whose manifest still names the template's
       # placeholder repository has the placeholder's name too, and the
       # crates.io crate of that name is someone else's. That is this
-      # template itself, and a new repo until SETUP.md's search and replace.
+      # template itself, and a repo made from it until its placeholders go.
       # Listed before anything is cached or installed, so a repo with
       # nothing to compare yet pays for neither.
       - name: List the crates to compare
