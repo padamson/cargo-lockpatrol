@@ -68,9 +68,10 @@ what a pass looks like; CI is the backstop, not the plan.
 
 **Not from a session at all**, changed on github.com or crates.io: the
 `main` branch protection and its required checks, the `release tags`
-ruleset, Allow auto-merge and automatic head-branch deletion, the merge
-App and its two Dependabot secrets, Dependabot alerts and security
-updates, and the crate's Trusted Publisher (SETUP.md has each).
+ruleset, the `release` environment and its tag policy, Allow auto-merge
+and automatic head-branch deletion, the merge App and its two Dependabot
+secrets, Dependabot alerts and security updates, and the crate's Trusted
+Publisher (SETUP.md has each).
 
 **By eye:**
 
