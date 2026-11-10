@@ -11,8 +11,6 @@
       "cargo nextest run *",
       "cargo run *",
       "./scripts/mutants.sh *",
-      "./scripts/ci-watch.sh",
-      "./scripts/ci-watch.sh *",
       "prek *"
     ]
   }

@@ -50,22 +50,6 @@ prek install --overwrite   # --overwrite replaces any legacy pre-commit hook
 Hooks mirror CI checks: fmt, clippy, check, nextest, doctest, deny, vet,
 and the skill version guard.
 
-## Watching CI
-
-```bash
-./scripts/ci-watch.sh            # stream job results for HEAD until they finish
-./scripts/ci-watch.sh <sha>      # for a specific commit
-./scripts/ci-watch.sh --poll 15 --timeout 600   # poll every 15s, give up after 10 minutes
-```
-
-One line per job as it reaches a terminal state, then an exit code:
-0 all green, 1 something failed, 2 timed out or a usage error. A `gh`
-call inside a shell loop is not matched by the sandbox's command
-exclusion, so this script is excluded as a whole in
-`.claude/settings.json`. Pass `--poll` and `--timeout` as flags: an
-env-var prefix (`POLL=15 ./scripts/ci-watch.sh`) is not the excluded
-command, so the script runs sandboxed and every `gh` call fails.
-
 ## Manual checks
 
 What a session cannot check and the person reviewing the work can. A
