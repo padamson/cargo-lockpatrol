@@ -3,7 +3,7 @@ name: cargo-lockpatrol
 description: Use when a repo checks RustSec advisories with cargo-deny through cargo-lockpatrol, or is replacing copied scripts/check-advisories.sh and advisory-monitor.yml with its GitHub Action and pre-commit hook; covers the check exit codes, pinning the action and hook by SHA, and the tracking issue.
 license: MIT OR Apache-2.0
 metadata:
-  version: "1.0.3"
+  version: "1.1.0"
 ---
 
 # cargo-lockpatrol
@@ -12,15 +12,17 @@ metadata:
 `Cargo.lock` git tracks (the root and any nested tree, such as `fuzz/`),
 all against the root `deny.toml`, and exits 0 clean, 1 an advisory, 2 the
 check itself broke (an advisory-database fetch, a missing or bad
-`deny.toml`, a lock that disagrees with its manifests), or 3 both.
+`deny.toml`, a lock that disagrees with its manifests), or 3 both; 4 or 5
+is 0 or 1 with a denied stale ignore entry.
 cargo-deny must be on `PATH`; cargo-lockpatrol never installs it, and a
 version older than the 0.20.2 its tests pin reads as broken, never as clean.
 
 It reaches a repo three ways, all released under one tag:
 
-- **The GitHub Action**, as a gate (the step fails on 1, 2 or 3) or, with
+- **The GitHub Action**, as a gate (the step fails on any exit but 0) or, with
   `issue: "true"`, as a scheduled monitor that keeps one tracking issue
-  current and fails only on a broken check.
+  current and fails only on a broken check or a denied stale ignore
+  entry.
 - **The prek or pre-commit hook**, `cargo-lockpatrol` (builds the binary at
   the pinned rev) or `cargo-lockpatrol-system` (runs one on `PATH`).
 - **The binary**, `cargo install cargo-lockpatrol` or `cargo binstall
@@ -46,7 +48,16 @@ It reaches a repo three ways, all released under one tag:
   start it again.
 - **Ignore an advisory in `deny.toml`**, `[advisories].ignore`, with a
   `reason`. It is the one list for every tree, the gate, the hook and the
-  monitor.
+  monitor. An entry that matches nothing in any tree is stale: `check`
+  prints a warning for it (the action annotates the run; a passing hook
+  hides it), and with `unused-ignored-advisory = "deny"` the gate, the
+  hook and the monitor fail (exit 4, or 5 beside an advisory) until the
+  entry goes. `check` never reports an entry that only some trees use.
+- **Set `unused-ignored-advisory = "deny"` only where nothing else runs
+  `cargo deny check advisories` on that `deny.toml`.** A plain `cargo deny
+  check` reads one tree, so in a repo with several lockfiles it fails on
+  every entry that tree does not use. Keep cargo-deny's own step to `check
+  bans licenses sources`.
 - **Read exit 2 as broken, not as an advisory.** The reason is on stderr
   (the step log in CI), not in the report: a network failure or a stale
   `Cargo.lock` is fixed differently from a vulnerable dependency.

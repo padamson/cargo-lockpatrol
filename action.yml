@@ -18,9 +18,10 @@ inputs:
     default: root
   issue:
     description: >-
-      "false" (the gate): the step fails on a finding or a broken check.
-      "true" (the monitor): a finding opens or updates one tracking issue,
-      a clean check closes it, and the step fails only on a broken check.
+      "false" (the gate): the step fails on a finding, a broken check or a
+      denied stale ignore entry. "true" (the monitor): a finding opens or
+      updates one tracking issue, a clean check closes it, and the step
+      fails only on a broken check or a denied stale ignore entry.
       The monitor needs `issues: write`.
     default: "false"
   issue-title:
@@ -43,6 +44,9 @@ outputs:
   result:
     description: "What the check came to: clean, finding, broken, or both (a finding and a broken tree)."
     value: ${{ steps.check.outputs.result }}
+  stale-ignore:
+    description: '"true" when deny.toml denies unused ignore entries and one matches nothing in any tracked Cargo.lock, else "false".'
+    value: ${{ steps.check.outputs.stale }}
   report:
     description: The path of the report the check wrote.
     value: ${{ steps.check.outputs.report }}
@@ -128,16 +132,25 @@ runs:
         token=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
         echo "::stop-commands::$token"
         code=0
-        "$BIN" "${args[@]}" > "$report" || code=$?
+        "$BIN" "${args[@]}" > "$report" 2> "$dir/reasons.txt" || code=$?
+        cat "$dir/reasons.txt" >&2
         cat "$report"
         echo "::$token::"
+        # A stale ignore entry at warning level fails nothing, so it gets an
+        # annotation.
+        bash "$GITHUB_ACTION_PATH/scripts/annotate.sh" "$dir/reasons.txt"
+        # 4 and 5 are 0 and 1 with a denied stale ignore entry.
+        stale=false
         case "$code" in
           0) result=clean ;;
           1) result=finding ;;
           3) result=both ;;
+          4) result=clean stale=true ;;
+          5) result=finding stale=true ;;
           *) result=broken ;;
         esac
         echo "result=$result" >> "$GITHUB_OUTPUT"
+        echo "stale=$stale" >> "$GITHUB_OUTPUT"
         echo "report=$report" >> "$GITHUB_OUTPUT"
         if [ "$ISSUE" = false ]; then
           exit "$code"
@@ -235,4 +248,12 @@ runs:
       shell: bash
       run: |
         echo "::error::one lockfile's advisory check broke while another found something; see the Check advisories step"
+        exit 1
+
+    # After the issue is filed or closed: the report was whole.
+    - name: Fail on a denied stale ignore entry
+      if: inputs.issue == 'true' && steps.check.outputs.stale == 'true'
+      shell: bash
+      run: |
+        echo "::error::deny.toml denies unused ignore entries and one matches nothing in any tracked Cargo.lock; see the Check advisories step"
         exit 1

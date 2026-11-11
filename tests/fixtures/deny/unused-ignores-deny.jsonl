@@ -1,0 +1,3 @@
+{"fields":{"code":"advisory-not-detected","graphs":[],"labels":[{"column":12,"line":4,"message":"no crate matched advisory criteria","span":"RUSTSEC-2020-0001"}],"message":"advisory was not encountered","severity":"error"},"type":"diagnostic"}
+{"fields":{"code":"yanked-not-detected","graphs":[],"labels":[{"column":43,"line":4,"message":"yanked crate not detected","span":"smallvec@1.4.0"},{"column":70,"line":4,"message":"reason","span":"y"}],"message":"yanked crate was not encountered","severity":"error"},"type":"diagnostic"}
+{"fields":{"advisories":{"errors":2,"helps":0,"notes":0,"warnings":0}},"type":"summary"}

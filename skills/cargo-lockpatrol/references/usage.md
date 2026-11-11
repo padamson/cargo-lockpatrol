@@ -8,7 +8,7 @@ cargo lockpatrol check [--config <PATH>] [--locked <root|none|all>]
 
 Writes the report to stdout, one section per lockfile with findings, and
 why any tree broke to stderr. Exit 0 clean, 1 an advisory, 2 broken, 3
-both.
+both; 4 or 5 is 0 or 1 with a denied stale ignore entry (below).
 
 - `--config`: the `deny.toml` every tree is checked against, relative to
   the current directory. Default: `deny.toml` at the repository root, even
@@ -20,6 +20,22 @@ both.
   checking a quietly rewritten graph; nested trees are exempt because one
   that path-depends on the root crate goes stale on every version bump.
   `all` and `none` do what they say.
+
+An `[advisories].ignore` entry that matches nothing in any tracked
+lockfile is stale, and `check` names it on stderr: as a warning at
+cargo-deny's default, or as an error that adds 4 to the exit code when
+`deny.toml` sets `unused-ignored-advisory = "deny"`: 4 on clean trees, 5
+beside a finding. The report is complete either way, so the monitor files
+or closes its issue first and then fails. An entry that some tree
+uses is never reported, however many trees leave it unused. When a tree
+broke, an entry the other trees leave unused is a warning that says so,
+since the broken tree may be the one that needs it. A yanked-crate entry
+is not counted unused in a tree where cargo-deny could not reach the
+registry.
+
+Only `check` reads the trees together. A plain `cargo deny check
+advisories` with `unused-ignored-advisory = "deny"` fails on every entry
+its one tree does not use.
 
 A repository with no tracked `Cargo.lock` is broken (exit 2), not clean.
 
@@ -48,7 +64,8 @@ the body only) or `unchanged` (touch nothing).
 | `issue-label` | `security-advisory` | created on the first finding if missing |
 | `github-token` | `github.token` | downloads the release, manages the issue |
 
-Outputs: `result` (`clean`, `finding`, `broken` or `both`) and `report`
+Outputs: `result` (`clean`, `finding`, `broken` or `both`), `stale-ignore`
+(`true` when a denied ignore entry matches nothing in any tree) and `report`
 (the report's path).
 
 The monitor needs `permissions: issues: write`. It opens the issue on a

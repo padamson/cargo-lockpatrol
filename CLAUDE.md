@@ -8,7 +8,7 @@ tracked `Cargo.lock` and keeps one GitHub issue current with the findings.
 One tag releases three things that share one checker:
 
 - the crate and its binary `cargo-lockpatrol` (run as `cargo lockpatrol`):
-  `check` is the gate (exit 0 clean, 1 finding, 2 broken, 3 both), and
+  `check` is the gate (exit 0 clean, 1 finding, 2 broken, 3 both, plus 4 for a denied stale ignore), and
   `render` turns the old issue body and a report into the new body and a
   change comment;
 - a composite `action.yml` at the root, which downloads the release binary

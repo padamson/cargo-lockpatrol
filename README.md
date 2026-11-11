@@ -13,6 +13,17 @@ with `cargo-deny`, and keep one GitHub issue current with what it finds.
   advisory-database fetch, a missing or bad `deny.toml`, a `cargo metadata`
   failure), and 3 for both, so a network error never reads as an advisory
   and a broken tree cannot hide behind a clean one.
+- Reports an `[advisories].ignore` entry that matches nothing in any
+  tracked `Cargo.lock`. cargo-deny checks one tree at a time, so an entry
+  that one tree needs is unused in every other, and its own
+  `unused-ignored-advisory` check cannot tell that from an entry no tree
+  needs. `check` reports only the second kind: a warning on stderr by
+  default (an annotation on the run, through the action), or an error
+  that adds 4 to the exit code (so 4, or 5 beside a finding) when
+  `deny.toml` sets `unused-ignored-advisory = "deny"`.
+  That setting is for a `deny.toml` only `cargo lockpatrol check` reads
+  advisories with: a plain `cargo deny check advisories` on one tree still
+  fails on every entry that tree does not use.
 - Keeps one tracking issue. Each run rewrites the body, a comment is added
   only when the set of advisory ids changes (naming what came and what
   went), and the issue closes when every tree is clean. Triage goes in the
@@ -41,7 +52,7 @@ cargo install cargo-lockpatrol    # or: cargo binstall cargo-lockpatrol
 ## Usage
 
 ```bash
-cargo lockpatrol check    # the gate: exit 0, 1, 2 or 3 as above
+cargo lockpatrol check    # the gate: exit 0 to 5 as above
 cargo lockpatrol render OLD REPORT OUT COMMENT [--run-url URL]
                           # the issue: prints changed, refreshed or unchanged
 ```
@@ -74,7 +85,8 @@ Without it cargo rewrites a stale `Cargo.lock` in the checkout, and the
 action checks the rewritten lock instead of the committed one.
 
 As a monitor, a finding opens or updates one tracking issue, a clean check
-closes it, and the step fails only on a broken check:
+closes it, and the step fails only on a broken check or a denied stale
+ignore entry:
 
 ```yaml
 on:
@@ -111,7 +123,8 @@ Inputs: `deny-config` (default `deny.toml` at the root), `locked` (`root`,
 `none` or `all`), `working-directory` (a directory inside the repository
 to run from; `deny-config` is relative to it), `issue`, `issue-title`,
 `issue-label` and `github-token`.
-Outputs: `result` (`clean`, `finding`, `broken` or `both`) and `report`,
+Outputs: `result` (`clean`, `finding`, `broken` or `both`), `stale-ignore`
+(`true` when a denied ignore entry matches nothing in any tree) and `report`,
 the path of the report.
 
 ### pre-commit and prek

@@ -190,13 +190,35 @@ jobs:
         env:
           STUB_ROOT: "two-advisories:1"
 
+      - name: "Gate: a stale ignore at warning level passes"
+        id: gate_stale
+        uses: ./
+        with:
+          binary: ${{ env.BIN }}
+        env:
+          STUB_ROOT: "unused-ignores-warn:0"
+
+      # One tracked Cargo.lock here, so the entries are unused in every tree.
+      - name: "Gate: a denied stale ignore fails the step"
+        id: gate_denied
+        continue-on-error: true
+        uses: ./
+        with:
+          binary: ${{ env.BIN }}
+        env:
+          STUB_ROOT: "unused-ignores-deny:1"
+
       - name: Check the gate
         env:
           CLEAN: ${{ steps.gate_clean.outputs.result }}
+          STALE: ${{ steps.gate_stale.outputs.result }}
+          DENIED: ${{ steps.gate_denied.outcome }}/${{ steps.gate_denied.outputs.result }}/${{ steps.gate_denied.outputs.stale-ignore }}
           FINDING: ${{ steps.gate_finding.outcome }}/${{ steps.gate_finding.outputs.result }}
         run: |
           set -euo pipefail
           [ "$CLEAN" = clean ] || { echo "::error::clean gate gave '$CLEAN'"; exit 1; }
+          [ "$STALE" = clean ] || { echo "::error::stale-ignore gate gave '$STALE'"; exit 1; }
+          [ "$DENIED" = failure/clean/true ] || { echo "::error::denied stale-ignore gate gave '$DENIED'"; exit 1; }
           [ "$FINDING" = failure/finding ] || { echo "::error::finding gate gave '$FINDING'"; exit 1; }
           [ ! -e "$FAKE_GH_DIR/calls" ] || { echo "::error::the gate called gh:"; cat "$FAKE_GH_DIR/calls"; exit 1; }
 
@@ -263,6 +285,26 @@ jobs:
         run: |
           set -euo pipefail
           cat "$FAKE_GH_DIR/calls"
+          grep -qx 'issue close 7 --comment .*' "$FAKE_GH_DIR/calls"
+          rm "$FAKE_GH_DIR/calls"
+
+      # The report is whole, so the issue is closed before the step fails.
+      - name: "Monitor: a denied stale ignore closes the issue, then fails"
+        id: monitor_denied
+        continue-on-error: true
+        uses: ./
+        with:
+          binary: ${{ env.BIN }}
+          issue: "true"
+        env:
+          STUB_ROOT: "unused-ignores-deny:1"
+
+      - name: Check the close and the failure
+        env:
+          DENIED: ${{ steps.monitor_denied.outcome }}/${{ steps.monitor_denied.outputs.result }}/${{ steps.monitor_denied.outputs.stale-ignore }}
+        run: |
+          set -euo pipefail
+          [ "$DENIED" = failure/clean/true ] || { echo "::error::denied stale-ignore monitor gave '$DENIED'"; exit 1; }
           grep -qx 'issue close 7 --comment .*' "$FAKE_GH_DIR/calls"
           rm "$FAKE_GH_DIR/calls"
 

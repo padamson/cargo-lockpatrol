@@ -562,7 +562,11 @@ mod tests {
     fn report(trees: &[(&str, &str)]) -> String {
         let results: Vec<_> = trees
             .iter()
-            .map(|(lockfile, run)| (PathBuf::from(lockfile), deny::classify(Some(1), run)))
+            .map(|(lockfile, run)| crate::check::Tree {
+                lockfile: PathBuf::from(lockfile),
+                result: deny::classify(Some(1), run),
+                unused: vec![],
+            })
             .collect();
         let mut out = Vec::new();
         crate::check::write_report(&results, &mut out, &mut std::io::sink())

@@ -185,6 +185,14 @@ impl Run {
     }
 }
 
+/// Whether a line of `stderr` starts with `level` and holds every one of
+/// `tokens`.
+fn names(stderr: &str, level: &str, tokens: &[&str]) -> bool {
+    stderr
+        .lines()
+        .any(|l| l.starts_with(level) && tokens.iter().all(|t| l.contains(t)))
+}
+
 impl std::fmt::Debug for Run {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -282,9 +290,39 @@ fn a_tree_that_stopped_with_only_an_error_log_exits_two_with_an_empty_report() {
 }
 
 #[test]
-fn a_stale_ignore_entry_is_broken_not_an_advisory() {
-    let run = Repo::new().check("unused-ignore:1", "clean:0");
-    assert_eq!((run.code, run.stdout.as_str()), (Some(2), ""), "{run:?}");
+fn a_denied_ignore_that_only_some_trees_leave_unused_passes() {
+    // The nested trees stand for one that needs the entries.
+    let run = Repo::new().check("unused-ignores-deny:1", "clean:0");
+    assert_eq!((run.code, run.stderr.as_str()), (Some(0), ""), "{run:?}");
+}
+
+#[test]
+fn a_denied_ignore_that_every_tree_leaves_unused_exits_four_and_is_named() {
+    let repo = Repo::new();
+    let run = repo.check("unused-ignores-deny:1", "unused-ignores-deny:1");
+    let config = format!("{}/deny.toml", repo.root.display());
+    let named = ["RUSTSEC-2020-0001", "smallvec@1.4.0"]
+        .map(|e| names(&run.stderr, "error: ", &[&config, e]));
+    assert_eq!(
+        (run.code, run.stdout.as_str(), named),
+        (Some(4), "", [true, true]),
+        "{run:?}"
+    );
+}
+
+#[test]
+fn an_ignore_that_every_tree_leaves_unused_at_warning_level_is_named_and_passes() {
+    let run = Repo::new().check("unused-ignores-warn:0", "unused-ignores-warn:0");
+    let named =
+        ["RUSTSEC-2020-0001", "RUSTSEC-2021-0003"].map(|e| names(&run.stderr, "warning: ", &[e]));
+    assert_eq!((run.code, named), (Some(0), [true, true]), "{run:?}");
+}
+
+#[test]
+fn beside_a_broken_tree_an_ignore_the_other_trees_leave_unused_is_a_warning() {
+    let run = Repo::new().check("config-error:1", "unused-ignores-deny:1");
+    let named = names(&run.stderr, "warning: ", &["RUSTSEC-2020-0001"]);
+    assert_eq!((run.code, named), (Some(2), true), "{run:?}");
 }
 
 #[test]
@@ -412,6 +450,12 @@ fn a_usage_error_exits_two() {
 /// A committed crate named `live` with `dependencies` (TOML lines) and a
 /// lockfile, and the outcome of `cargo-lockpatrol check` on it.
 fn live_check(dependencies: &str) -> Output {
+    live_check_with(dependencies, "")
+}
+
+/// [`live_check`] with `advisories` (TOML lines) added to `deny.toml`'s
+/// `[advisories]` table.
+fn live_check_with(dependencies: &str, advisories: &str) -> Output {
     let ws = Workspace::new();
     ws.write(
         "repo/Cargo.toml",
@@ -420,7 +464,10 @@ fn live_check(dependencies: &str) -> Output {
         ),
     );
     ws.write("repo/src/lib.rs", "");
-    ws.write("repo/deny.toml", "[advisories]\nversion = 2\n");
+    ws.write(
+        "repo/deny.toml",
+        &format!("[advisories]\nversion = 2\n{advisories}"),
+    );
     let root = ws.root().join("repo");
     let lock = Command::new(env!("CARGO"))
         .arg("generate-lockfile")
@@ -461,6 +508,26 @@ fn live_a_known_vulnerability_is_a_finding_under_the_real_cargo_deny() {
     assert_eq!(
         (out.status.code(), reported),
         (Some(1), true),
+        "{}",
+        shown(&out)
+    );
+}
+
+// An unused ignore is a warning at cargo-deny's default, which only a run
+// at `--log-level warn` reports, and its entry is read from the
+// diagnostic's label rather than its message.
+#[test]
+#[ignore = "needs cargo-deny and the advisory database; CI runs it in security.yml's deny job; locally: cargo nextest run --run-ignored only -E 'test(/^live_/)'"]
+fn live_an_ignore_no_tree_uses_is_named_under_the_real_cargo_deny() {
+    let out = live_check_with("", "ignore = [\"RUSTSEC-2020-0001\"]\n");
+    let named = names(
+        &String::from_utf8_lossy(&out.stderr),
+        "warning: ",
+        &["RUSTSEC-2020-0001"],
+    );
+    assert_eq!(
+        (out.status.code(), named),
+        (Some(0), true),
         "{}",
         shown(&out)
     );

@@ -1,0 +1,3 @@
+{"fields":{"code":"advisory-not-detected","graphs":[],"labels":[{"column":12,"line":3,"message":"no crate matched advisory criteria","span":"RUSTSEC-2020-0001"}],"message":"advisory was not encountered","severity":"warning"},"type":"diagnostic"}
+{"fields":{"code":"advisory-not-detected","graphs":[],"labels":[{"column":40,"line":3,"message":"no crate matched advisory criteria","span":"RUSTSEC-2021-0003"},{"column":70,"line":3,"message":"ignore reason","span":"x"}],"message":"advisory was not encountered","severity":"warning"},"type":"diagnostic"}
+{"fields":{"advisories":{"errors":0,"helps":0,"notes":0,"warnings":2}},"type":"summary"}

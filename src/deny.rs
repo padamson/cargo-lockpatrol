@@ -9,9 +9,10 @@
 use serde_json::Value;
 
 /// The diagnostic codes that are advisories against a crate in the tree.
-/// Every other code that fails a run (`unexpected-keys` from a bad config,
-/// `advisory-not-detected` from a stale ignore) is a broken check: there
-/// is nothing in the dependency tree to triage.
+/// [`read`] takes an ignore entry the run matched nothing with apart from
+/// the rest; every other code that fails a run
+/// (`unexpected-keys` from a bad config) is a broken check: there is
+/// nothing in the dependency tree to triage.
 pub const FINDING_CODES: [&str; 5] = [
     "vulnerability",
     "unmaintained",
@@ -19,6 +20,28 @@ pub const FINDING_CODES: [&str; 5] = [
     "notice",
     "yanked",
 ];
+
+/// The diagnostic codes for an `[advisories].ignore` entry that matched
+/// nothing in the tree: an advisory id, or a yanked crate.
+const UNUSED_CODES: [&str; 2] = ["advisory-not-detected", YANKED_NOT_DETECTED];
+const YANKED_NOT_DETECTED: &str = "yanked-not-detected";
+
+/// The warning for a crate whose registry cargo-deny could not ask whether
+/// it is yanked. A yanked-crate ignore for it then reads as unused
+/// (`check` in cargo-deny 0.20.2's src/advisories.rs).
+const INDEX_FAILURE_CODE: &str = "index-failure";
+
+/// An `[advisories].ignore` entry that one run matched nothing with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnusedIgnore {
+    /// The entry as `deny.toml` spells it: a `RUSTSEC-` id, or a yanked
+    /// crate such as `smallvec@1.4.0`.
+    pub entry: String,
+    /// Whether the run counted it as an error, as it does under
+    /// `unused-ignored-advisory = "deny"`. cargo-deny's default is a
+    /// warning.
+    pub denied: bool,
+}
 
 /// One advisory cargo-deny reported against one crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,9 +65,10 @@ pub struct Finding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TreeResult {
     Clean,
-    /// Advisories, and any other errors the same run reported (a stale
-    /// ignore entry beside a real finding), which a caller should still
-    /// show: the gate is red on both.
+    /// Advisories, and any other errors the same run reported (a second
+    /// error beside a real finding), which a caller should still show: the
+    /// gate is red on both. From [`classify`] a denied unused ignore entry
+    /// is one of them; [`read`] returns those apart.
     Found {
         findings: Vec<Finding>,
         messages: Vec<String>,
@@ -68,7 +92,8 @@ pub enum BrokenKind {
     NotRun,
     /// No summary line: cargo-deny stopped before it checked anything.
     NoSummary,
-    /// The run finished and failed, but on nothing in [`FINDING_CODES`].
+    /// The run finished and failed, but on nothing in [`FINDING_CODES`]
+    /// (nor, from [`read`], only on unused ignore entries).
     NoFinding,
 }
 
@@ -80,6 +105,10 @@ pub enum BrokenKind {
 /// cargo-deny's JSON that drops or renames the summary fails loudly
 /// instead of passing every tree.
 ///
+/// This reads the run alone: an ignore entry it matched nothing with is
+/// an error like any other when `deny.toml` denies it. [`read`] reads the
+/// run as one tree of several.
+///
 /// ```
 /// use cargo_lockpatrol::deny::{classify, TreeResult};
 ///
@@ -88,33 +117,153 @@ pub enum BrokenKind {
 /// assert!(matches!(classify(Some(0), ""), TreeResult::Broken(_)));
 /// ```
 pub fn classify(exit: Option<i32>, output: &str) -> TreeResult {
-    let mut summary = false;
-    let mut findings = Vec::new();
+    let run = parse(output);
+    let messages = run
+        .lines
+        .into_iter()
+        .filter_map(|line| match line {
+            Line::Error(m) | Line::NotJson(m) => Some(m),
+            Line::Unused {
+                ignore, headline, ..
+            } => ignore.denied.then_some(headline),
+        })
+        .collect();
+    conclude(exit, run.summary, run.findings, messages, false)
+}
+
+/// One tree's run in a repository whose trees share a `deny.toml`: what it
+/// came to, and the ignore entries it matched nothing with, at either
+/// severity: the advisory ids, then the yanked crates, each in the order
+/// cargo-deny reported them.
+///
+/// Most entries of a shared `deny.toml` are unused in most trees, so
+/// whether one is stale is the caller's to decide across every tree, and a
+/// run that failed only on unused entries is clean here. A yanked-crate
+/// entry is left out when the run could not ask a registry about some
+/// crate, since the entry may be for that crate. cargo-deny reports unused
+/// entries only at `--log-level warn` or below unless `deny.toml` denies
+/// them.
+pub fn read(exit: Option<i32>, output: &str) -> (TreeResult, Vec<UnusedIgnore>) {
+    let run = parse(output);
     let mut messages = Vec::new();
+    let mut unused = Vec::new();
+    let mut yanked = Vec::new();
+    // Whether cargo-deny reported an error other than an unused entry. A
+    // line that is not JSON is not one: cargo and rustup write plain
+    // notices to stderr on runs that pass.
+    let mut other_error = false;
+    for line in run.lines {
+        match line {
+            Line::Error(m) => {
+                other_error = true;
+                messages.push(m);
+            }
+            Line::NotJson(m) => messages.push(m),
+            Line::Unused {
+                ignore,
+                yanked: true,
+                ..
+            } => yanked.push(ignore),
+            Line::Unused { ignore, .. } => unused.push(ignore),
+        }
+    }
+    let unverified = run.index_failed && yanked.iter().any(|u| u.denied);
+    if !run.index_failed {
+        unused.append(&mut yanked);
+    }
+    let excused =
+        exit == Some(1) && !other_error && (unverified || unused.iter().any(|u| u.denied));
+    (
+        conclude(exit, run.summary, run.findings, messages, excused),
+        unused,
+    )
+}
+
+/// A line of a run's output that is neither its summary nor a finding.
+enum Line {
+    /// An error diagnostic with no finding code, or an `ERROR` log record.
+    Error(String),
+    /// Not JSON, so not cargo-deny's.
+    NotJson(String),
+    /// An ignore entry the run matched nothing with: whether it is for a
+    /// yanked crate, and the diagnostic as [`Line::Error`] would hold it.
+    Unused {
+        ignore: UnusedIgnore,
+        yanked: bool,
+        headline: String,
+    },
+}
+
+/// A run's output, read once for [`classify`] and [`read`] to weigh.
+struct Run {
+    summary: bool,
+    findings: Vec<Finding>,
+    lines: Vec<Line>,
+    /// Whether cargo-deny could not ask a registry about some crate.
+    index_failed: bool,
+}
+
+fn parse(output: &str) -> Run {
+    let mut run = Run {
+        summary: false,
+        findings: Vec::new(),
+        lines: Vec::new(),
+        index_failed: false,
+    };
     for line in output.lines().filter(|l| !l.trim().is_empty()) {
         let Ok(record) = serde_json::from_str::<Value>(line) else {
-            messages.push(line.to_string());
+            run.lines.push(Line::NotJson(line.to_string()));
             continue;
         };
         let fields = &record["fields"];
         match record["type"].as_str() {
-            Some("summary") => summary = true,
-            Some("diagnostic") if fields["severity"] == "error" => match finding(fields) {
-                Some(f) => findings.push(f),
-                None => messages.push(headline(text(&fields["code"]), text(&fields["message"]))),
-            },
-            Some("log") if fields["level"] == "ERROR" => {
-                messages.push(format!("[ERROR] {}", text(&fields["message"])))
+            Some("summary") => run.summary = true,
+            Some("diagnostic") => {
+                let error = fields["severity"] == "error";
+                let code = text(&fields["code"]);
+                let headline = || headline(code, text(&fields["message"]));
+                run.index_failed |= code == INDEX_FAILURE_CODE;
+                if let Some(entry) = unused_entry(fields) {
+                    run.lines.push(Line::Unused {
+                        ignore: UnusedIgnore {
+                            entry,
+                            denied: error,
+                        },
+                        yanked: code == YANKED_NOT_DETECTED,
+                        headline: headline(),
+                    });
+                } else if let Some(f) = finding(fields).filter(|_| error) {
+                    run.findings.push(f);
+                } else if error {
+                    run.lines.push(Line::Error(headline()));
+                }
             }
+            Some("log") if fields["level"] == "ERROR" => run
+                .lines
+                .push(Line::Error(format!("[ERROR] {}", text(&fields["message"])))),
             _ => {}
         }
     }
+    run
+}
+
+/// What a run came to. `excused` is whether its failure is accounted for
+/// by something that is not this tree's to fail on.
+fn conclude(
+    exit: Option<i32>,
+    summary: bool,
+    findings: Vec<Finding>,
+    messages: Vec<String>,
+    excused: bool,
+) -> TreeResult {
     let kind = if !summary {
         BrokenKind::NoSummary
     } else if exit == Some(0) {
         return TreeResult::Clean;
     } else if !findings.is_empty() {
         return TreeResult::Found { findings, messages };
+    } else if excused {
+        return TreeResult::Clean;
     } else {
         BrokenKind::NoFinding
     };
@@ -123,6 +272,16 @@ pub fn classify(exit: Option<i32>, output: &str) -> TreeResult {
         exit,
         messages,
     })
+}
+
+/// The entry an unused-ignore diagnostic names: its first label's span,
+/// the entry's text in `deny.toml`. One without a span names nothing, so
+/// it is read as any other diagnostic is.
+fn unused_entry(fields: &Value) -> Option<String> {
+    if !UNUSED_CODES.contains(&text(&fields["code"])) {
+        return None;
+    }
+    fields["labels"][0]["span"].as_str().map(str::to_string)
 }
 
 fn text(value: &Value) -> &str {
@@ -380,19 +539,148 @@ mod tests {
         assert_eq!(f.graph, ["├ bincode v1.3.3", "  └── fx v0.1.0"]);
     }
 
+    /// The ignore entries `output` reports unused, read as `check` reads
+    /// them.
+    fn unused_in(output: &str) -> Vec<UnusedIgnore> {
+        read(Some(0), output).1
+    }
+
+    const ADVISORY_NOT_DETECTED: &str =
+        "error[advisory-not-detected]: advisory was not encountered";
+
     #[test]
     fn a_finding_keeps_the_other_errors_its_run_reported() {
         // A stale ignore entry beside a real advisory: the gate is red on
         // both, so the stale entry must not vanish behind the finding.
-        let stale = UNUSED_IGNORE.lines().next().unwrap_or("");
-        let run = format!("{stale}\n{UNMAINTAINED}");
+        let run = format!("{}\n{UNMAINTAINED}", first(UNUSED_DENY));
         match classify(Some(1), &run) {
-            TreeResult::Found { messages, .. } => assert_eq!(
-                messages,
-                ["error[advisory-not-detected]: advisory was not encountered"]
+            TreeResult::Found { messages, .. } => assert_eq!(messages, [ADVISORY_NOT_DETECTED]),
+            other => panic!("expected Found, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_run_classified_alone_is_broken_by_its_denied_unused_ignores() {
+        let b = broken(classify(Some(1), UNUSED_DENY));
+        assert_eq!(
+            (b.kind, b.messages),
+            (
+                BrokenKind::NoFinding,
+                vec![
+                    ADVISORY_NOT_DETECTED.to_string(),
+                    "error[yanked-not-detected]: yanked crate was not encountered".to_string()
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn an_unused_ignore_beside_a_finding_is_read_as_unused_not_as_a_message() {
+        // An entry this tree does not use may be what another tree needs.
+        let run = format!("{}\n{UNMAINTAINED}", first(UNUSED_DENY));
+        match read(Some(1), &run) {
+            (TreeResult::Found { messages, .. }, unused) => assert_eq!(
+                (messages, unused),
+                (vec![], vec![ignore("RUSTSEC-2020-0001", true)])
             ),
             other => panic!("expected Found, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_failed_run_whose_only_errors_are_unused_ignores_reads_as_clean() {
+        assert_eq!(read(Some(1), UNUSED_DENY).0, TreeResult::Clean);
+    }
+
+    #[test]
+    fn a_line_that_is_not_cargo_denys_does_not_break_a_run_failed_by_unused_ignores() {
+        let run = format!("info: syncing channel updates\n{UNUSED_DENY}");
+        assert_eq!(read(Some(1), &run).0, TreeResult::Clean);
+    }
+
+    #[test]
+    fn a_failed_run_with_unused_ignores_only_at_warning_level_reads_as_broken() {
+        // The warnings did not fail it, so something else did.
+        assert_eq!(
+            broken(read(Some(1), UNUSED_WARN).0).kind,
+            BrokenKind::NoFinding
+        );
+    }
+
+    #[test]
+    fn unused_ignores_beside_another_error_read_as_broken() {
+        let run = format!("{}\n{UNUSED_DENY}", first(CONFIG_ERROR));
+        assert_eq!(broken(read(Some(1), &run).0).kind, BrokenKind::NoFinding);
+    }
+
+    #[test]
+    fn unused_ignores_under_an_exit_code_other_than_one_read_as_broken() {
+        // cargo-deny exits 1 for errors it reported; anything else failed
+        // in a way the JSON does not say.
+        assert_eq!(
+            broken(read(Some(101), UNUSED_DENY).0).kind,
+            BrokenKind::NoFinding
+        );
+    }
+
+    #[test]
+    fn a_yanked_ignore_is_not_read_as_unused_when_a_registry_could_not_be_asked() {
+        // The entry may be for the crate cargo-deny could not look up.
+        let run = format!("{}\n{UNUSED_DENY}", first(INDEX_FAILURE));
+        assert_eq!(read(Some(1), &run).1, [ignore("RUSTSEC-2020-0001", true)]);
+    }
+
+    #[test]
+    fn a_registry_that_could_not_be_asked_does_not_excuse_a_failed_run() {
+        // The yanked entry is unused at warning level, which fails no run,
+        // so something else did.
+        let denied = r#""message":"yanked crate was not encountered","severity":"error""#;
+        assert!(INDEX_FAILURE.contains(denied), "got: {INDEX_FAILURE}");
+        let run = INDEX_FAILURE.replace(denied, &denied.replace("error", "warning"));
+        assert_eq!(broken(read(Some(1), &run).0).kind, BrokenKind::NoFinding);
+    }
+
+    #[test]
+    fn a_run_failed_only_by_a_yanked_ignore_it_could_not_check_reads_as_clean() {
+        assert_eq!(read(Some(1), INDEX_FAILURE), (TreeResult::Clean, vec![]));
+    }
+
+    #[test]
+    fn unused_ignores_at_warning_level_are_read_with_their_entries() {
+        assert_eq!(
+            unused_in(UNUSED_WARN),
+            [
+                ignore("RUSTSEC-2020-0001", false),
+                ignore("RUSTSEC-2021-0003", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn denied_unused_ignores_are_read_with_an_advisory_id_and_a_yanked_crate() {
+        assert_eq!(
+            unused_in(UNUSED_DENY),
+            [
+                ignore("RUSTSEC-2020-0001", true),
+                ignore("smallvec@1.4.0", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unused_ignore_diagnostic_without_a_span_is_a_message() {
+        let bare = first(UNUSED_DENY).replace(r#""span":"RUSTSEC-2020-0001""#, r#""x":1"#);
+        let summary = UNUSED_DENY.lines().last().expect("fixture has a summary");
+        let (result, unused) = read(Some(1), &format!("{bare}\n{summary}"));
+        assert_eq!(
+            (broken(result).messages, unused),
+            (vec![ADVISORY_NOT_DETECTED.to_string()], vec![])
+        );
+    }
+
+    #[test]
+    fn a_run_with_no_unused_ignores_reads_none() {
+        assert_eq!(unused_in(TWO), []);
     }
 
     #[test]
@@ -436,19 +724,6 @@ mod tests {
     fn a_bad_manifest_path_is_broken_without_a_summary() {
         let b = broken(classify(Some(1), MISSING_MANIFEST));
         assert_eq!(b.kind, BrokenKind::NoSummary);
-    }
-
-    #[test]
-    fn a_failed_run_whose_only_error_is_a_stale_ignore_is_broken_not_a_finding() {
-        let b = broken(classify(Some(1), UNUSED_IGNORE));
-        assert_eq!(
-            (b.kind, b.exit, b.messages),
-            (
-                BrokenKind::NoFinding,
-                Some(1),
-                vec!["error[advisory-not-detected]: advisory was not encountered".to_string()]
-            )
-        );
     }
 
     #[test]

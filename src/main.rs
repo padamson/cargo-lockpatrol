@@ -14,7 +14,8 @@ Usage: cargo lockpatrol check [--config <PATH>] [--locked <root|none|all>]
        cargo lockpatrol render <OLD> <REPORT> <OUT> <COMMENT> [--run-url <URL>]
 
 check writes a report to stdout. Exit status: 0 clean, 1 an advisory found,
-2 a check broke, 3 both.
+2 a check broke, 3 both. 4 is added to 0 or 1 when deny.toml denies unused
+ignore entries and one matches nothing in any tracked Cargo.lock.
 
   --config <PATH>   the deny.toml every tree is checked against
                     [default: deny.toml at the repository root]

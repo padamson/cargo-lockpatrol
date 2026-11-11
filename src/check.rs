@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
 
-use crate::deny::{self, Broken, BrokenKind, TreeResult};
+use crate::deny::{self, Broken, BrokenKind, TreeResult, UnusedIgnore};
 
 /// Every tree clean.
 pub const EXIT_CLEAN: u8 = 0;
@@ -29,6 +29,12 @@ pub const EXIT_BROKEN: u8 = 2;
 /// gets filed, and the job still fails, so a dead check cannot hide
 /// behind a live one.
 pub const EXIT_FOUND_AND_BROKEN: u8 = 3;
+/// Added to [`EXIT_CLEAN`] or [`EXIT_FOUND`], so 4 or 5: `deny.toml` denies
+/// unused ignore entries and one matches nothing in any tree. It is its
+/// own bit because the report is still whole: a caller can file or close
+/// on the findings and then fail on the entry. Never beside a broken tree,
+/// which may be the one that needs the entry.
+pub const EXIT_STALE_IGNORE: u8 = 4;
 
 /// Which trees get `--locked`, which fails a run whose `Cargo.lock`
 /// disagrees with its manifests.
@@ -96,8 +102,9 @@ pub fn cargo_program(env: impl Fn(&str) -> Option<OsString>) -> OsString {
 /// The arguments after `cargo` for one tree.
 ///
 /// `--format json` because the JSON tells a finding from a broken run and
-/// the human report does not. `--log-level error` drops warn-level
-/// advisories, which do not fail the check. `--config` because cargo deny
+/// the human report does not. `--log-level warn` because an unused ignore
+/// entry is a warning at cargo-deny's default; a warning-level advisory
+/// it lets through is not a finding. `--config` because cargo deny
 /// otherwise prefers a `deny.toml` next to the manifest. `--workspace`
 /// graphs every member, not just the root package and what it depends on.
 fn deny_args(lockfile: &Path, config: &Path, locked: bool) -> Vec<OsString> {
@@ -106,7 +113,7 @@ fn deny_args(lockfile: &Path, config: &Path, locked: bool) -> Vec<OsString> {
         "--format",
         "json",
         "--log-level",
-        "error",
+        "warn",
         "--color",
         "never",
         "--workspace",
@@ -152,23 +159,52 @@ fn path_from_bytes(bytes: &[u8]) -> PathBuf {
     }
 }
 
-/// The exit code for what every tree came to: found plus twice broken.
-/// An empty list would pass every tree by checking none of them, so it is
-/// broken.
-fn exit_code(results: &[(PathBuf, TreeResult)]) -> u8 {
-    let found = results
+/// One tree's run: its lockfile, what it came to, and the ignore entries
+/// it matched nothing with.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Tree {
+    pub lockfile: PathBuf,
+    pub result: TreeResult,
+    pub unused: Vec<UnusedIgnore>,
+}
+
+/// The ignore entries that every tree whose check ran matched nothing
+/// with, each once, in the order the first of those trees reported them,
+/// and whether every tree's check ran. A broken tree may have needed an
+/// entry the others did not, so beside one the entries are candidates, not
+/// known to be stale.
+fn stale_ignores(trees: &[Tree]) -> (Vec<UnusedIgnore>, bool) {
+    let ran: Vec<&Tree> = trees
         .iter()
-        .any(|(_, r)| matches!(r, TreeResult::Found { .. }));
-    let broken = results.is_empty()
-        || results
+        .filter(|t| !matches!(t.result, TreeResult::Broken(_)))
+        .collect();
+    let mut stale: Vec<UnusedIgnore> = Vec::new();
+    for u in ran.first().map_or(&[][..], |t| &t.unused) {
+        if !stale.contains(u) && ran.iter().all(|t| t.unused.contains(u)) {
+            stale.push(u.clone());
+        }
+    }
+    (stale, ran.len() == trees.len())
+}
+
+/// The exit code for what every tree came to: found, plus twice broken,
+/// plus [`EXIT_STALE_IGNORE`] for a denied stale ignore entry. An empty
+/// list would pass every tree by checking none of them, so it is broken.
+fn exit_code(trees: &[Tree], denied_stale: bool) -> u8 {
+    let found = trees
+        .iter()
+        .any(|t| matches!(t.result, TreeResult::Found { .. }));
+    let broken = trees.is_empty()
+        || trees
             .iter()
-            .any(|(_, r)| matches!(r, TreeResult::Broken(_)));
-    match (found, broken) {
+            .any(|t| matches!(t.result, TreeResult::Broken(_)));
+    let trees = match (found, broken) {
         (false, false) => EXIT_CLEAN,
         (true, false) => EXIT_FOUND,
         (false, true) => EXIT_BROKEN,
         (true, true) => EXIT_FOUND_AND_BROKEN,
-    }
+    };
+    trees + if denied_stale { EXIT_STALE_IGNORE } else { 0 }
 }
 
 /// What `check` needs to know.
@@ -255,9 +291,13 @@ pub fn run(opts: &Options, out: &mut impl Write, err: &mut impl Write) -> io::Re
         text.push_str(&String::from_utf8_lossy(&o.stdout));
         Ok((o.status.code(), text))
     };
-    let results = check_trees(&lockfiles, deny);
-    write_report(&results, out, err)?;
-    Ok(exit_code(&results))
+    let trees = check_trees(&lockfiles, deny);
+    let (stale, every_tree_ran) = stale_ignores(&trees);
+    write_report(&trees, out, err)?;
+    write_stale(&stale, every_tree_ran, &opts.config, err)?;
+    // Beside a broken tree the entries are candidates, which fail nothing.
+    let denied_stale = every_tree_ran && stale.iter().any(|u| u.denied);
+    Ok(exit_code(&trees, denied_stale))
 }
 
 /// Each of `lockfiles` with what its run came to, in order. `deny` runs
@@ -266,19 +306,26 @@ pub fn run(opts: &Options, out: &mut impl Write, err: &mut impl Write) -> io::Re
 fn check_trees(
     lockfiles: &[PathBuf],
     mut deny: impl FnMut(&Path) -> Result<(Option<i32>, String), String>,
-) -> Vec<(PathBuf, TreeResult)> {
+) -> Vec<Tree> {
     lockfiles
         .iter()
         .map(|lockfile| {
-            let result = match deny(lockfile) {
-                Ok((exit, output)) => deny::classify(exit, &output),
-                Err(why) => TreeResult::Broken(Broken {
-                    kind: BrokenKind::NotRun,
-                    exit: None,
-                    messages: vec![why],
-                }),
+            let (result, unused) = match deny(lockfile) {
+                Ok((exit, output)) => deny::read(exit, &output),
+                Err(why) => (
+                    TreeResult::Broken(Broken {
+                        kind: BrokenKind::NotRun,
+                        exit: None,
+                        messages: vec![why],
+                    }),
+                    Vec::new(),
+                ),
             };
-            (lockfile.clone(), result)
+            Tree {
+                lockfile: lockfile.clone(),
+                result,
+                unused,
+            }
         })
         .collect()
 }
@@ -286,33 +333,75 @@ fn check_trees(
 /// Write each tree's section of the report to `out`, and to `err` why a
 /// tree broke and any other error a tree with findings reported.
 pub(crate) fn write_report(
-    results: &[(PathBuf, TreeResult)],
+    trees: &[Tree],
     out: &mut impl Write,
     err: &mut impl Write,
 ) -> io::Result<()> {
-    if results.is_empty() {
+    if trees.is_empty() {
         writeln!(err, "no tracked Cargo.lock to check")?;
     }
-    for (lockfile, result) in results {
-        let name = lockfile.to_string_lossy();
-        match result {
+    for t in trees {
+        let name = t.lockfile.to_string_lossy();
+        match &t.result {
             TreeResult::Clean => {}
             TreeResult::Found { findings, messages } => {
                 writeln!(out, "{}", deny::section(&name, findings))?;
                 if !messages.is_empty() {
                     writeln!(err, "cargo deny on {name} also reported:")?;
                     for m in messages {
-                        writeln!(err, "    {m}")?;
+                        writeln!(err, "{}", indented(m))?;
                     }
                 }
             }
             TreeResult::Broken(b) => {
                 writeln!(err, "{}", describe(&name, b))?;
                 for m in &b.messages {
-                    writeln!(err, "    {m}")?;
+                    writeln!(err, "{}", indented(m))?;
                 }
             }
         }
+    }
+    Ok(())
+}
+
+/// `message` with each of its lines indented. A message from cargo may
+/// run to several lines, and at column 0 a `warning: ` or `error: ` line
+/// is one of this crate's own (scripts/annotate.sh reads them there).
+fn indented(message: &str) -> String {
+    message
+        .lines()
+        .map(|line| format!("    {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Write to `err` a line for each stale ignore entry, naming the config it
+/// is in: an error if the config denies unused entries, else a warning.
+/// When a tree broke, the entries are candidates, each a warning that says
+/// which trees it speaks for.
+fn write_stale(
+    stale: &[UnusedIgnore],
+    every_tree_ran: bool,
+    config: &Path,
+    err: &mut impl Write,
+) -> io::Result<()> {
+    let trees = if every_tree_ran {
+        "any tracked Cargo.lock"
+    } else {
+        "any Cargo.lock whose check ran"
+    };
+    for u in stale {
+        let level = if u.denied && every_tree_ran {
+            "error"
+        } else {
+            "warning"
+        };
+        writeln!(
+            err,
+            "{level}: {} ignores {}, which matches nothing in {trees}",
+            config.display(),
+            u.entry
+        )?;
     }
     Ok(())
 }
@@ -340,7 +429,7 @@ mod tests {
 
     use super::*;
     use crate::deny::Finding;
-    use crate::fixtures::{CONFIG_ERROR, UNMAINTAINED, UNUSED_IGNORE};
+    use crate::fixtures::{CLEAN, CONFIG_ERROR, STALE_LOCK, UNMAINTAINED, UNUSED_DENY, ignore};
 
     fn finding() -> TreeResult {
         TreeResult::Found {
@@ -363,10 +452,19 @@ mod tests {
         }
     }
 
-    fn results(list: Vec<(&str, TreeResult)>) -> Vec<(PathBuf, TreeResult)> {
-        list.into_iter()
-            .map(|(l, r)| (PathBuf::from(l), r))
-            .collect()
+    fn tree(lockfile: &str, result: TreeResult, unused: &[(&str, bool)]) -> Tree {
+        Tree {
+            lockfile: PathBuf::from(lockfile),
+            result,
+            unused: unused
+                .iter()
+                .map(|&(entry, denied)| ignore(entry, denied))
+                .collect(),
+        }
+    }
+
+    fn results(list: Vec<(&str, TreeResult)>) -> Vec<Tree> {
+        list.into_iter().map(|(l, r)| tree(l, r, &[])).collect()
     }
 
     /// What `write_report` wrote for `results`.
@@ -375,13 +473,30 @@ mod tests {
         err: String,
     }
 
-    fn written(results: &[(PathBuf, TreeResult)]) -> Written {
+    fn written(results: &[Tree]) -> Written {
         let (mut out, mut err) = (Vec::new(), Vec::new());
         write_report(results, &mut out, &mut err).expect("write to a Vec");
         Written {
             out: String::from_utf8(out).expect("utf-8 report"),
             err: String::from_utf8(err).expect("utf-8 reasons"),
         }
+    }
+
+    // cargo's own `error: ` line, which follows a newline inside one
+    // message of this fixture, must not read as one of this crate's.
+    #[test]
+    fn every_line_of_a_message_that_runs_to_several_is_indented() {
+        let w = written(&results(vec![(
+            "Cargo.lock",
+            deny::classify(Some(1), STALE_LOCK),
+        )]));
+        let own: Vec<&str> = w.err.lines().filter(|l| !l.starts_with("    ")).collect();
+        assert_eq!(
+            own,
+            ["cargo deny on Cargo.lock stopped before it checked anything (exit 1):"],
+            "got:\n{}",
+            w.err
+        );
     }
 
     /// The value that follows `flag` in `args`.
@@ -429,17 +544,135 @@ mod tests {
         );
         assert_eq!(
             got,
-            vec![
-                (
-                    PathBuf::from("Cargo.lock"),
-                    deny::classify(Some(1), UNMAINTAINED)
-                ),
-                (
-                    PathBuf::from("fuzz/Cargo.lock"),
-                    deny::classify(Some(1), CONFIG_ERROR)
-                ),
+            results(vec![
+                ("Cargo.lock", deny::classify(Some(1), UNMAINTAINED)),
+                ("fuzz/Cargo.lock", deny::classify(Some(1), CONFIG_ERROR)),
+            ])
+        );
+    }
+
+    #[test]
+    fn each_tree_carries_the_unused_ignores_of_its_own_run() {
+        let got = check_trees(
+            &[
+                PathBuf::from("Cargo.lock"),
+                PathBuf::from("fuzz/Cargo.lock"),
+            ],
+            |lockfile| {
+                Ok(if lockfile == Path::new("Cargo.lock") {
+                    (Some(1), UNUSED_DENY.to_string())
+                } else {
+                    (Some(0), CLEAN.to_string())
+                })
+            },
+        );
+        let unused: Vec<_> = got.iter().map(|t| t.unused.clone()).collect();
+        assert_eq!(
+            unused,
+            [
+                vec![
+                    ignore("RUSTSEC-2020-0001", true),
+                    ignore("smallvec@1.4.0", true)
+                ],
+                vec![]
             ]
         );
+    }
+
+    #[test]
+    fn an_entry_every_tree_left_unused_is_stale() {
+        let trees = [
+            tree(
+                "Cargo.lock",
+                TreeResult::Clean,
+                &[("RUSTSEC-2020-0001", false)],
+            ),
+            tree(
+                "fuzz/Cargo.lock",
+                finding(),
+                &[("RUSTSEC-2020-0001", false)],
+            ),
+        ];
+        assert_eq!(stale_ignores(&trees), (stale(false).to_vec(), true));
+    }
+
+    #[test]
+    fn an_entry_one_tree_used_is_not_stale() {
+        // The shape the multi-lockfile repos have: an ignore only the
+        // site's tree needs.
+        let trees = [
+            tree(
+                "Cargo.lock",
+                TreeResult::Clean,
+                &[("RUSTSEC-2025-0141", true)],
+            ),
+            tree("site/Cargo.lock", TreeResult::Clean, &[]),
+            tree(
+                "fuzz/Cargo.lock",
+                TreeResult::Clean,
+                &[("RUSTSEC-2025-0141", true)],
+            ),
+        ];
+        assert_eq!(stale_ignores(&trees).0, []);
+    }
+
+    #[test]
+    fn stale_entries_keep_the_first_trees_order() {
+        let both = [("RUSTSEC-2020-0002", false), ("RUSTSEC-2020-0001", false)];
+        let reversed = [("RUSTSEC-2020-0001", false), ("RUSTSEC-2020-0002", false)];
+        let trees = [
+            tree("Cargo.lock", TreeResult::Clean, &both),
+            tree("fuzz/Cargo.lock", TreeResult::Clean, &reversed),
+        ];
+        let entries: Vec<_> = stale_ignores(&trees)
+            .0
+            .into_iter()
+            .map(|u| u.entry)
+            .collect();
+        assert_eq!(entries, ["RUSTSEC-2020-0002", "RUSTSEC-2020-0001"]);
+    }
+
+    #[test]
+    fn an_entry_deny_toml_lists_twice_is_stale_once() {
+        // `ignore = ["RUSTSEC-2020-0001", { id = "RUSTSEC-2020-0001", reason = "..." }]`
+        // gets one diagnostic per listing.
+        let twice = [("RUSTSEC-2020-0001", false), ("RUSTSEC-2020-0001", false)];
+        let trees = [tree("Cargo.lock", TreeResult::Clean, &twice)];
+        assert_eq!(stale_ignores(&trees).0, stale(false));
+    }
+
+    #[test]
+    fn beside_a_broken_tree_what_the_other_trees_left_unused_is_only_a_candidate() {
+        // The broken tree never said which entries it uses, and its own
+        // list is not read: it may have stopped part way.
+        let trees = [
+            tree(
+                "Cargo.lock",
+                TreeResult::Clean,
+                &[("RUSTSEC-2020-0001", true)],
+            ),
+            tree(
+                "fuzz/Cargo.lock",
+                TreeResult::Broken(broken(BrokenKind::NoFinding, Some(1), &[])),
+                &[],
+            ),
+        ];
+        assert_eq!(stale_ignores(&trees), (stale(true).to_vec(), false));
+    }
+
+    #[test]
+    fn when_every_tree_broke_there_is_no_candidate() {
+        let trees = [tree(
+            "Cargo.lock",
+            TreeResult::Broken(broken(BrokenKind::NoFinding, Some(1), &[])),
+            &[("RUSTSEC-2020-0001", true)],
+        )];
+        assert_eq!(stale_ignores(&trees), (vec![], false));
+    }
+
+    #[test]
+    fn no_tree_means_no_stale_entry() {
+        assert_eq!(stale_ignores(&[]), (vec![], true));
     }
 
     #[test]
@@ -448,7 +681,7 @@ mod tests {
             ("Cargo.lock", TreeResult::Clean),
             ("fuzz/Cargo.lock", TreeResult::Clean),
         ]);
-        assert_eq!(exit_code(&r), EXIT_CLEAN);
+        assert_eq!(exit_code(&r, false), EXIT_CLEAN);
     }
 
     #[test]
@@ -457,7 +690,7 @@ mod tests {
             ("Cargo.lock", TreeResult::Clean),
             ("fuzz/Cargo.lock", finding()),
         ]);
-        assert_eq!(exit_code(&r), EXIT_FOUND);
+        assert_eq!(exit_code(&r, false), EXIT_FOUND);
     }
 
     #[test]
@@ -469,7 +702,7 @@ mod tests {
                 TreeResult::Broken(broken(BrokenKind::NoSummary, Some(1), &[])),
             ),
         ]);
-        assert_eq!(exit_code(&r), EXIT_BROKEN);
+        assert_eq!(exit_code(&r, false), EXIT_BROKEN);
     }
 
     #[test]
@@ -481,12 +714,30 @@ mod tests {
                 TreeResult::Broken(broken(BrokenKind::NoSummary, Some(1), &[])),
             ),
         ]);
-        assert_eq!(exit_code(&r), EXIT_FOUND_AND_BROKEN);
+        assert_eq!(exit_code(&r, false), EXIT_FOUND_AND_BROKEN);
+    }
+
+    fn stale(denied: bool) -> [UnusedIgnore; 1] {
+        [ignore("RUSTSEC-2020-0001", denied)]
+    }
+
+    #[test]
+    fn a_denied_stale_entry_on_clean_trees_exits_four() {
+        let r = results(vec![("Cargo.lock", TreeResult::Clean)]);
+        assert_eq!(exit_code(&r, true), 4);
+    }
+
+    #[test]
+    fn a_denied_stale_entry_beside_a_finding_exits_five() {
+        // Not three, which tells the monitor some tree's findings are
+        // missing and freezes the issue; a stale entry hides none.
+        let r = results(vec![("Cargo.lock", finding())]);
+        assert_eq!(exit_code(&r, true), 5);
     }
 
     #[test]
     fn no_tree_checked_exits_two() {
-        assert_eq!(exit_code(&[]), EXIT_BROKEN);
+        assert_eq!(exit_code(&[], false), EXIT_BROKEN);
     }
 
     // Writing: what goes to the report and what goes to the reasons.
@@ -500,7 +751,7 @@ mod tests {
     #[test]
     fn a_finding_goes_to_the_report_as_its_trees_section() {
         let r = results(vec![("fuzz/Cargo.lock", finding())]);
-        let TreeResult::Found { findings, .. } = &r[0].1 else {
+        let TreeResult::Found { findings, .. } = &r[0].result else {
             unreachable!("finding() is Found")
         };
         let w = written(&r);
@@ -513,18 +764,72 @@ mod tests {
 
     #[test]
     fn the_other_errors_of_a_tree_with_findings_go_to_the_reasons() {
-        let stale = UNUSED_IGNORE.lines().next().unwrap_or("");
+        let TreeResult::Found { findings, .. } = finding() else {
+            unreachable!("finding() is Found")
+        };
+        let messages = vec!["error[unexpected-keys]: one".to_string()];
         let r = results(vec![(
             "Cargo.lock",
-            deny::classify(Some(1), &format!("{stale}\n{UNMAINTAINED}")),
+            TreeResult::Found { findings, messages },
         )]);
         let w = written(&r);
-        assert!(
-            w.err
-                .contains("error[advisory-not-detected]: advisory was not encountered"),
+        assert_eq!(
+            w.err.lines().last().map(str::trim),
+            Some("error[unexpected-keys]: one"),
             "got:\n{}",
             w.err
         );
+    }
+
+    /// What `write_stale` wrote for `stale` in `ci/deny.toml`.
+    fn stale_written(stale: &[UnusedIgnore], every_tree_ran: bool) -> String {
+        let mut err = Vec::new();
+        write_stale(stale, every_tree_ran, Path::new("ci/deny.toml"), &mut err)
+            .expect("write to a Vec");
+        String::from_utf8(err).expect("utf-8 reasons")
+    }
+
+    #[test]
+    fn a_stale_entry_is_written_with_its_config_and_entry() {
+        let line = stale_written(&stale(false), true);
+        assert!(
+            line.contains("ci/deny.toml") && line.contains("RUSTSEC-2020-0001"),
+            "got: {line}"
+        );
+    }
+
+    // action.yml turns a line into an annotation by these two prefixes.
+    #[test]
+    fn a_stale_entry_is_a_warning_unless_denied() {
+        let [warned, denied] = [false, true].map(|d| stale_written(&stale(d), true));
+        assert_eq!(
+            (
+                warned.starts_with("warning: "),
+                denied.starts_with("error: ")
+            ),
+            (true, true),
+            "got: {warned:?} and {denied:?}"
+        );
+    }
+
+    #[test]
+    fn a_denied_candidate_is_a_warning() {
+        let line = stale_written(&stale(true), false);
+        assert!(line.starts_with("warning: "), "got: {line}");
+    }
+
+    #[test]
+    fn only_a_candidate_says_it_speaks_for_the_trees_whose_check_ran() {
+        // The token is the claim: a broken tree may yet need the entry.
+        let [candidate, settled] =
+            [false, true].map(|ran| stale_written(&stale(false), ran).contains("whose check ran"));
+        assert_eq!((candidate, settled), (true, false));
+    }
+
+    #[test]
+    fn each_stale_entry_gets_its_own_line() {
+        let two = [stale(false), stale(true)].concat();
+        assert_eq!(stale_written(&two, true).lines().count(), 2);
     }
 
     #[test]
@@ -652,7 +957,7 @@ mod tests {
     }
 
     #[test]
-    fn every_run_asks_for_json_at_error_level_over_the_whole_workspace() {
+    fn every_run_asks_for_json_at_warn_level_over_the_whole_workspace() {
         let args = deny_args(Path::new("Cargo.lock"), Path::new("deny.toml"), false);
         assert_eq!(
             (
@@ -660,7 +965,7 @@ mod tests {
                 value_after(&args, "--log-level"),
                 args.iter().any(|a| a == "--workspace")
             ),
-            (Some(OsStr::new("json")), Some(OsStr::new("error")), true),
+            (Some(OsStr::new("json")), Some(OsStr::new("warn")), true),
             "got {args:?}"
         );
     }
