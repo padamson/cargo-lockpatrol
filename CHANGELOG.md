@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 - `check` names each `[advisories].ignore` entry that matches nothing in any tracked `Cargo.lock`: a warning by default, or an error that adds 4 to the exit code (4, or 5 beside a finding) when `deny.toml` sets `unused-ignored-advisory = "deny"`. When a tree broke, an entry the other trees leave unused is a warning only
+- `check` writes a line to stderr for each clean tree, such as `Cargo.lock: clean`, so a passing run's log shows which lockfiles were checked. The report on stdout stays empty
 - The action annotates the run with each of those lines, and has a `stale-ignore` output. As a monitor it files or closes its issue before it fails on a denied stale entry
 - `deny::read`, which reads a run as one tree of several: it returns the ignore entries the run matched nothing with beside its result, and a run that failed only on those is clean. `deny::classify` reads a run alone, as before
 

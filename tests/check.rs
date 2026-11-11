@@ -212,6 +212,17 @@ fn every_tree_clean_exits_zero_with_an_empty_report() {
     assert_eq!((run.code, run.stdout.as_str()), (Some(0), ""), "{run:?}");
 }
 
+/// What a run where every tracked tree came out clean writes to stderr.
+fn every_tree_clean() -> String {
+    TRACKED.map(|t| format!("{t}: clean\n")).concat()
+}
+
+#[test]
+fn a_clean_run_names_each_tracked_tree_on_stderr() {
+    let run = Repo::new().check("clean:0", "clean:0");
+    assert_eq!(run.stderr, every_tree_clean(), "{run:?}");
+}
+
 #[test]
 fn each_tracked_lockfile_is_checked_once_by_its_name_on_disk() {
     let run = Repo::new().check("clean:0", "clean:0");
@@ -293,7 +304,11 @@ fn a_tree_that_stopped_with_only_an_error_log_exits_two_with_an_empty_report() {
 fn a_denied_ignore_that_only_some_trees_leave_unused_passes() {
     // The nested trees stand for one that needs the entries.
     let run = Repo::new().check("unused-ignores-deny:1", "clean:0");
-    assert_eq!((run.code, run.stderr.as_str()), (Some(0), ""), "{run:?}");
+    assert_eq!(
+        (run.code, run.stderr.as_str()),
+        (Some(0), every_tree_clean().as_str()),
+        "{run:?}"
+    );
 }
 
 #[test]

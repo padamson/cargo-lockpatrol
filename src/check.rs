@@ -330,8 +330,10 @@ fn check_trees(
         .collect()
 }
 
-/// Write each tree's section of the report to `out`, and to `err` why a
-/// tree broke and any other error a tree with findings reported.
+/// Write each tree's section of the report to `out`, and to `err` a line
+/// for each clean tree, why a tree broke, and any other error a tree with
+/// findings reported. The clean lines are for a CI log, which otherwise
+/// shows nothing of a passing run; the report stays empty.
 pub(crate) fn write_report(
     trees: &[Tree],
     out: &mut impl Write,
@@ -343,7 +345,7 @@ pub(crate) fn write_report(
     for t in trees {
         let name = t.lockfile.to_string_lossy();
         match &t.result {
-            TreeResult::Clean => {}
+            TreeResult::Clean => writeln!(err, "{name}: clean")?,
             TreeResult::Found { findings, messages } => {
                 writeln!(out, "{}", deny::section(&name, findings))?;
                 if !messages.is_empty() {
@@ -743,9 +745,12 @@ mod tests {
     // Writing: what goes to the report and what goes to the reasons.
 
     #[test]
-    fn a_clean_tree_writes_nothing() {
+    fn a_clean_tree_is_named_in_the_reasons_and_not_in_the_report() {
         let w = written(&results(vec![("Cargo.lock", TreeResult::Clean)]));
-        assert_eq!((w.out.as_str(), w.err.as_str()), ("", ""));
+        assert_eq!(
+            (w.out.as_str(), w.err.as_str()),
+            ("", "Cargo.lock: clean\n")
+        );
     }
 
     #[test]

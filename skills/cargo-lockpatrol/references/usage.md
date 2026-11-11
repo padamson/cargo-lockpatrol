@@ -7,7 +7,8 @@ cargo lockpatrol check [--config <PATH>] [--locked <root|none|all>]
 ```
 
 Writes the report to stdout, one section per lockfile with findings, and
-why any tree broke to stderr. Exit 0 clean, 1 an advisory, 2 broken, 3
+to stderr a line for each clean lockfile (`Cargo.lock: clean`) and why any
+tree broke. Exit 0 clean, 1 an advisory, 2 broken, 3
 both; 4 or 5 is 0 or 1 with a denied stale ignore entry (below).
 
 - `--config`: the `deny.toml` every tree is checked against, relative to
