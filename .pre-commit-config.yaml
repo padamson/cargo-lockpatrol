@@ -121,6 +121,6 @@ repos:
 
   # The released hook, as consumers pin it, not this working tree.
   - repo: https://github.com/padamson/cargo-lockpatrol
-    rev: 40075b2231e33e8f0a6d08f39acd0691e1f3efba  # frozen: v0.1.1
+    rev: e791845e4a03af540c2348755c3695041cdd54fd  # frozen: v0.2.0
     hooks:
       - id: cargo-lockpatrol
