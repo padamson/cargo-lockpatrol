@@ -1,5 +1,6 @@
 # cargo-deny configuration
-# Run: cargo deny check
+# Run: cargo deny --workspace check bans licenses sources
+# Advisories: cargo lockpatrol check (every tracked Cargo.lock)
 # Docs: https://embarkstudios.github.io/cargo-deny/
 
 [graph]

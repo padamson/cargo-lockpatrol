@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-11
+
 ### Added
 - `check` names each `[advisories].ignore` entry that matches nothing in any tracked `Cargo.lock`: a warning by default, or an error that adds 4 to the exit code (4, or 5 beside a finding) when `deny.toml` sets `unused-ignored-advisory = "deny"`. When a tree broke, an entry the other trees leave unused is a warning only
 - The action annotates the run with each stale entry, and has a `stale-ignore` output. As a monitor it files or closes its issue before it fails on a denied stale entry
@@ -36,6 +38,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - An agent skill: `npx skills add padamson/cargo-lockpatrol`
 - Release archives for Linux (x86_64, aarch64; static, so any glibc), macOS (x86_64, aarch64) and Windows (x86_64), with build provenance, named so `cargo binstall` finds them
 
-[Unreleased]: https://github.com/padamson/cargo-lockpatrol/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/padamson/cargo-lockpatrol/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/padamson/cargo-lockpatrol/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/padamson/cargo-lockpatrol/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/padamson/cargo-lockpatrol/releases/tag/v0.1.0
