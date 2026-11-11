@@ -131,9 +131,11 @@ runs:
         # are not ours: no line of either stream may run as a command.
         token=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
         echo "::stop-commands::$token"
+        # stderr is shown as it comes, so a run that hangs shows its tree,
+        # and kept for the annotations below. The runner's bash has -e on,
+        # so the exit code is kept by the ||, not read after the line.
         code=0
-        "$BIN" "${args[@]}" > "$report" 2> "$dir/reasons.txt" || code=$?
-        cat "$dir/reasons.txt" >&2
+        "$BIN" "${args[@]}" 2>&1 > "$report" | tee "$dir/reasons.txt" >&2 || code=${PIPESTATUS[0]}
         cat "$report"
         echo "::$token::"
         # A stale ignore entry at warning level fails nothing, so it gets an

@@ -291,9 +291,8 @@ pub fn run(opts: &Options, out: &mut impl Write, err: &mut impl Write) -> io::Re
         text.push_str(&String::from_utf8_lossy(&o.stdout));
         Ok((o.status.code(), text))
     };
-    let trees = check_trees(&lockfiles, deny);
+    let trees = check_trees(&lockfiles, deny, out, err)?;
     let (stale, every_tree_ran) = stale_ignores(&trees);
-    write_report(&trees, out, err)?;
     write_stale(&stale, every_tree_ran, &opts.config, err)?;
     // Beside a broken tree the entries are candidates, which fail nothing.
     let denied_stale = every_tree_ran && stale.iter().any(|u| u.denied);
@@ -302,14 +301,21 @@ pub fn run(opts: &Options, out: &mut impl Write, err: &mut impl Write) -> io::Re
 
 /// Each of `lockfiles` with what its run came to, in order. `deny` runs
 /// cargo deny on one tree and returns its exit code and output, or why it
-/// could not start.
-fn check_trees(
+/// could not start. Each tree's lines are written as its run ends, after a
+/// line naming it as the run starts, so a CI log shows a run that hangs.
+pub(crate) fn check_trees(
     lockfiles: &[PathBuf],
     mut deny: impl FnMut(&Path) -> Result<(Option<i32>, String), String>,
-) -> Vec<Tree> {
+    out: &mut impl Write,
+    err: &mut impl Write,
+) -> io::Result<Vec<Tree>> {
+    if lockfiles.is_empty() {
+        writeln!(err, "no tracked Cargo.lock to check")?;
+    }
     lockfiles
         .iter()
         .map(|lockfile| {
+            writeln!(err, "checking {}", lockfile.to_string_lossy())?;
             let (result, unused) = match deny(lockfile) {
                 Ok((exit, output)) => deny::read(exit, &output),
                 Err(why) => (
@@ -321,45 +327,38 @@ fn check_trees(
                     Vec::new(),
                 ),
             };
-            Tree {
+            let tree = Tree {
                 lockfile: lockfile.clone(),
                 result,
                 unused,
-            }
+            };
+            write_tree(&tree, out, err)?;
+            Ok(tree)
         })
         .collect()
 }
 
-/// Write each tree's section of the report to `out`, and to `err` a line
-/// for each clean tree, why a tree broke, and any other error a tree with
-/// findings reported. The clean lines are for a CI log, which otherwise
-/// shows nothing of a passing run; the report stays empty.
-pub(crate) fn write_report(
-    trees: &[Tree],
-    out: &mut impl Write,
-    err: &mut impl Write,
-) -> io::Result<()> {
-    if trees.is_empty() {
-        writeln!(err, "no tracked Cargo.lock to check")?;
-    }
-    for t in trees {
-        let name = t.lockfile.to_string_lossy();
-        match &t.result {
-            TreeResult::Clean => writeln!(err, "{name}: clean")?,
-            TreeResult::Found { findings, messages } => {
-                writeln!(out, "{}", deny::section(&name, findings))?;
-                if !messages.is_empty() {
-                    writeln!(err, "cargo deny on {name} also reported:")?;
-                    for m in messages {
-                        writeln!(err, "{}", indented(m))?;
-                    }
-                }
-            }
-            TreeResult::Broken(b) => {
-                writeln!(err, "{}", describe(&name, b))?;
-                for m in &b.messages {
+/// Write a tree's section of the report to `out` if it found something,
+/// and to `err` that it is clean, why it broke, or any other error it
+/// reported beside its findings. The clean line is for a CI log, which
+/// otherwise shows nothing of a passing run; the report stays empty.
+fn write_tree(t: &Tree, out: &mut impl Write, err: &mut impl Write) -> io::Result<()> {
+    let name = t.lockfile.to_string_lossy();
+    match &t.result {
+        TreeResult::Clean => writeln!(err, "{name}: clean")?,
+        TreeResult::Found { findings, messages } => {
+            writeln!(out, "{}", deny::section(&name, findings))?;
+            if !messages.is_empty() {
+                writeln!(err, "cargo deny on {name} also reported:")?;
+                for m in messages {
                     writeln!(err, "{}", indented(m))?;
                 }
+            }
+        }
+        TreeResult::Broken(b) => {
+            writeln!(err, "{}", describe(&name, b))?;
+            for m in &b.messages {
+                writeln!(err, "{}", indented(m))?;
             }
         }
     }
@@ -469,7 +468,64 @@ mod tests {
         list.into_iter().map(|(l, r)| tree(l, r, &[])).collect()
     }
 
-    /// What `write_report` wrote for `results`.
+    /// The trees `check_trees` returns, its writing thrown away.
+    fn checked(
+        lockfiles: &[PathBuf],
+        deny: impl FnMut(&Path) -> Result<(Option<i32>, String), String>,
+    ) -> Vec<Tree> {
+        check_trees(lockfiles, deny, &mut io::sink(), &mut io::sink()).expect("write to a sink")
+    }
+
+    /// A writer whose bytes the test can read while another holds it.
+    #[derive(Clone, Default)]
+    struct Shared(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+
+    impl Write for Shared {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.borrow_mut().write(buf)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Shared {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.borrow().clone()).expect("utf-8")
+        }
+    }
+
+    // A run that hangs shows in a CI log as the last tree named, and the
+    // trees before it as done.
+    #[test]
+    fn each_tree_is_named_as_its_run_starts_and_its_lines_written_as_it_ends() {
+        let err = Shared::default();
+        let mut seen = Vec::new();
+        let lockfiles = [
+            PathBuf::from("Cargo.lock"),
+            PathBuf::from("fuzz/Cargo.lock"),
+        ];
+        let watch = err.clone();
+        check_trees(
+            &lockfiles,
+            |_| {
+                seen.push(watch.text());
+                Ok((Some(0), CLEAN.to_string()))
+            },
+            &mut io::sink(),
+            &mut err.clone(),
+        )
+        .expect("write to a Shared buffer");
+        assert_eq!(
+            seen,
+            [
+                "checking Cargo.lock\n",
+                "checking Cargo.lock\nCargo.lock: clean\nchecking fuzz/Cargo.lock\n"
+            ]
+        );
+    }
+
+    /// What `write_tree` wrote for each of `results`.
     struct Written {
         out: String,
         err: String,
@@ -477,7 +533,9 @@ mod tests {
 
     fn written(results: &[Tree]) -> Written {
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        write_report(results, &mut out, &mut err).expect("write to a Vec");
+        for t in results {
+            write_tree(t, &mut out, &mut err).expect("write to a Vec");
+        }
         Written {
             out: String::from_utf8(out).expect("utf-8 report"),
             err: String::from_utf8(err).expect("utf-8 reasons"),
@@ -512,7 +570,7 @@ mod tests {
 
     #[test]
     fn a_run_that_could_not_start_is_broken_with_no_exit_code_and_its_reason() {
-        let got = check_trees(&[PathBuf::from("Cargo.lock")], |_| {
+        let got = checked(&[PathBuf::from("Cargo.lock")], |_| {
             Err("could not run /no/cargo: not found".to_string())
         });
         assert_eq!(
@@ -530,7 +588,7 @@ mod tests {
 
     #[test]
     fn each_tree_is_classified_from_its_own_run_and_kept_in_order() {
-        let got = check_trees(
+        let got = checked(
             &[
                 PathBuf::from("Cargo.lock"),
                 PathBuf::from("fuzz/Cargo.lock"),
@@ -555,7 +613,7 @@ mod tests {
 
     #[test]
     fn each_tree_carries_the_unused_ignores_of_its_own_run() {
-        let got = check_trees(
+        let got = checked(
             &[
                 PathBuf::from("Cargo.lock"),
                 PathBuf::from("fuzz/Cargo.lock"),
@@ -853,8 +911,15 @@ mod tests {
 
     #[test]
     fn no_tree_checked_says_so_in_the_reasons() {
-        let w = written(&[]);
-        assert!(w.err.contains("Cargo.lock"), "got:\n{}", w.err);
+        let err = Shared::default();
+        check_trees(
+            &[],
+            |_| unreachable!("no tree to run"),
+            &mut io::sink(),
+            &mut err.clone(),
+        )
+        .expect("write to a Shared buffer");
+        assert_eq!(err.text(), "no tracked Cargo.lock to check\n");
     }
 
     #[test]

@@ -7,12 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 - `check` names each `[advisories].ignore` entry that matches nothing in any tracked `Cargo.lock`: a warning by default, or an error that adds 4 to the exit code (4, or 5 beside a finding) when `deny.toml` sets `unused-ignored-advisory = "deny"`. When a tree broke, an entry the other trees leave unused is a warning only
-- `check` writes a line to stderr for each clean tree, such as `Cargo.lock: clean`, so a passing run's log shows which lockfiles were checked. The report on stdout stays empty
-- The action annotates the run with each of those lines, and has a `stale-ignore` output. As a monitor it files or closes its issue before it fails on a denied stale entry
+- The action annotates the run with each stale entry, and has a `stale-ignore` output. As a monitor it files or closes its issue before it fails on a denied stale entry
+- `check` writes `checking <lockfile>` to stderr as each tree's run starts, and that tree's lines as it ends, among them one for a clean tree such as `Cargo.lock: clean`. A passing run's log shows which lockfiles were checked, and a run that hangs shows which one it is on. The report on stdout stays empty
+- The action shows `check`'s stderr as it comes, where it used to show it once the run ended
 - `deny::read`, which reads a run as one tree of several: it returns the ignore entries the run matched nothing with beside its result, and a run that failed only on those is clean. `deny::classify` reads a run alone, as before
 
 ### Changed
-- Under `unused-ignored-advisory = "deny"`, `check` no longer breaks on an entry that one tree leaves unused and another needs; only an entry that no tree uses fails it, with exit 4 or 5 where it was exit 2. Before, a shared entry failed every tree that did not need it
+- Under `unused-ignored-advisory = "deny"`, `check` no longer breaks on an entry that one tree leaves unused and another needs; only an entry that no tree uses fails it, with exit 4 or 5 where it was exit 2. Before, a shared entry failed every tree that did not need it. Before turning `deny` on, narrow every plain `cargo deny check` (a CI step, a hook, a dev command in a README or CLAUDE.md) to `cargo deny check bans licenses sources`: cargo-deny on its own reads one tree, and fails with `advisory-not-detected` on each ignore entry that tree does not use
 - A line on cargo-deny's stderr that is not JSON no longer breaks a run that failed only on unused ignore entries
 - Every line of a cargo-deny message that runs to several lines is indented on stderr, so cargo's own `error:` lines are not annotated by the action
 - `check` runs cargo-deny at `--log-level warn`, the level at which cargo-deny reports an unused ignore by default

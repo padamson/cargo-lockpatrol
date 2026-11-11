@@ -214,7 +214,9 @@ fn every_tree_clean_exits_zero_with_an_empty_report() {
 
 /// What a run where every tracked tree came out clean writes to stderr.
 fn every_tree_clean() -> String {
-    TRACKED.map(|t| format!("{t}: clean\n")).concat()
+    TRACKED
+        .map(|t| format!("checking {t}\n{t}: clean\n"))
+        .concat()
 }
 
 #[test]
@@ -284,12 +286,19 @@ fn a_yanked_crate_is_reported_by_its_headline() {
 }
 
 #[test]
-fn a_tree_that_broke_exits_two_with_an_empty_report_and_says_which_tree() {
+fn a_tree_that_broke_exits_two_with_an_empty_report_and_says_why_after_naming_it() {
     let run = Repo::new().check("config-error:1", "clean:0");
-    let names_tree = run.stderr.starts_with("cargo deny on Cargo.lock ");
+    let opening: Vec<&str> = run.stderr.lines().take(2).collect();
     assert_eq!(
-        (run.code, run.stdout.as_str(), names_tree),
-        (Some(2), "", true),
+        (run.code, run.stdout.as_str(), opening),
+        (
+            Some(2),
+            "",
+            vec![
+                "checking Cargo.lock",
+                "cargo deny on Cargo.lock stopped before it checked anything (exit 1):"
+            ]
+        ),
         "{run:?}"
     );
 }

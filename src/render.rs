@@ -560,17 +560,16 @@ mod tests {
     /// The report `check` writes for these trees, each a lockfile and the
     /// cargo-deny run captured for it.
     fn report(trees: &[(&str, &str)]) -> String {
-        let results: Vec<_> = trees
-            .iter()
-            .map(|(lockfile, run)| crate::check::Tree {
-                lockfile: PathBuf::from(lockfile),
-                result: deny::classify(Some(1), run),
-                unused: vec![],
-            })
-            .collect();
+        let lockfiles: Vec<_> = trees.iter().map(|(l, _)| PathBuf::from(l)).collect();
+        let mut runs = trees.iter().map(|(_, run)| run.to_string());
         let mut out = Vec::new();
-        crate::check::write_report(&results, &mut out, &mut std::io::sink())
-            .expect("write to a Vec");
+        crate::check::check_trees(
+            &lockfiles,
+            |_| Ok((Some(1), runs.next().expect("a run per tree"))),
+            &mut out,
+            &mut std::io::sink(),
+        )
+        .expect("write to a Vec");
         String::from_utf8(out).expect("the report is UTF-8")
     }
 
