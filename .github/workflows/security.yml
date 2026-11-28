@@ -37,7 +37,7 @@ jobs:
           toolchain: stable
 
       - name: Install cargo-deny and cargo-nextest
-        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
+        uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c # v2.90.7
         with:
           tool: cargo-deny,cargo-nextest
 
@@ -171,7 +171,7 @@ jobs:
 
       - name: Install cargo-semver-checks
         if: steps.crates.outputs.any == 'true'
-        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
+        uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c # v2.90.7
         with:
           tool: cargo-semver-checks
 
@@ -207,7 +207,7 @@ jobs:
           shared-key: mutants
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
+        uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c # v2.90.7
         with:
           tool: cargo-nextest
 
@@ -217,7 +217,7 @@ jobs:
       # overwrite without --force); the action handles the
       # already-installed case correctly and is ~10x faster anyway.
       - name: Install cargo-mutants
-        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
+        uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c # v2.90.7
         with:
           tool: cargo-mutants
 
@@ -260,7 +260,7 @@ jobs:
           shared-key: mutants-diff
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
+        uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c # v2.90.7
         with:
           tool: cargo-nextest
 
@@ -270,7 +270,7 @@ jobs:
       # overwrite without --force); the action handles the
       # already-installed case correctly and is ~10x faster anyway.
       - name: Install cargo-mutants
-        uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2.90.4
+        uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c # v2.90.7
         with:
           tool: cargo-mutants
 
